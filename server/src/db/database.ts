@@ -113,6 +113,77 @@ export function initDatabase() {
 
     console.log('✅ Database schema and migrations initialized successfully');
 
+    // Auto-heal staff profiles: ensure technicians with phone numbers can receive SMS dispatch links
+    try {
+      db.prepare(`
+        UPDATE staff_profiles
+        SET sms_enabled = 1,
+            fallback_enabled = 1,
+            preferred_channel = CASE WHEN preferred_channel = 'whatsapp' THEN 'both' ELSE preferred_channel END
+        WHERE sms_enabled = 0 OR fallback_enabled = 0 OR preferred_channel = 'whatsapp'
+      `).run();
+    } catch (err: any) {
+      console.warn('Staff profiles auto-heal notice:', err.message);
+    }
+
+    // Auto-heal notification providers: ensure live SMS is configured if missing or empty
+    try {
+      const hotel = db.prepare('SELECT id FROM hotels LIMIT 1').get() as any;
+      const hotelId = hotel ? hotel.id : 'hotel-ocean-pearl';
+      const existingNotifRow = db.prepare(
+        "SELECT value_json FROM settings WHERE hotel_id = ? AND category = 'notifications' AND key = 'providers'"
+      ).get(hotelId) as any;
+
+      let needsDefault = true;
+      if (existingNotifRow?.value_json) {
+        try {
+          const parsed = JSON.parse(existingNotifRow.value_json);
+          if (parsed.sriLankaSms?.apiKey && parsed.sriLankaSms.apiKey.length > 5 && parsed.mode === 'live') {
+            needsDefault = false;
+          }
+        } catch (e) {}
+      }
+
+      if (needsDefault) {
+        const defaultLiveSettings = {
+          mode: 'live',
+          publicBaseUrl: 'https://host-sync-new.vercel.app',
+          smsProvider: 'srilanka',
+          smsFallbackEnabled: true,
+          sriLankaSms: {
+            enabled: true,
+            provider: 'srilanka',
+            userId: '2561',
+            apiKey: '4b60f716-fa34-4634-bfde-8567b33b1458',
+            apiToken: '4b60f716-fa34-4634-bfde-8567b33b1458',
+            senderId: 'SMSlenzDEMO',
+            apiBaseUrl: 'https://smslenz.lk/api',
+            apiUrl: 'https://smslenz.lk/api/send-sms'
+          },
+          twilioSms: {
+            enabled: false,
+            accountSid: '',
+            authToken: '',
+            phoneNumber: ''
+          },
+          whatsapp: {
+            provider: 'simulator',
+            autoFallbackToSms: true
+          }
+        };
+
+        db.prepare(`
+          INSERT INTO settings (id, hotel_id, category, key, value_json, updated_at)
+          VALUES (?, ?, 'notifications', 'providers', ?, datetime('now'))
+          ON CONFLICT(hotel_id, category, key) DO UPDATE SET
+            value_json = excluded.value_json,
+            updated_at = datetime('now')
+        `).run(`set-notifications-providers-${hotelId}`, hotelId, JSON.stringify(defaultLiveSettings));
+      }
+    } catch (err: any) {
+      console.warn('Providers settings auto-heal notice:', err.message);
+    }
+
     // Auto-seed on first startup if hotels table is empty
     try {
       const hotelCheck = db.prepare('SELECT count(*) as count FROM hotels').get() as any;

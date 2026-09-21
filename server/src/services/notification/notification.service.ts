@@ -254,7 +254,14 @@ ${payload.jobUrl}`;
 
     // Helper: Send SMS
     const dispatchSms = async (isFallback = false) => {
-      if (!smsEnabled || !mobilePhone) return;
+      // Allow SMS dispatch if SMS is enabled OR if mobilePhone exists and WhatsApp is not live / fallback
+      const canSend = Boolean(mobilePhone) && (smsEnabled || isFallback || !isWaLive);
+      if (!canSend) {
+        console.warn(`[NotificationService] Skipping SMS dispatch for staff ${staffId}: mobilePhone='${mobilePhone}', smsEnabled=${smsEnabled}, isFallback=${isFallback}, isWaLive=${isWaLive}`);
+        return;
+      }
+
+      console.log(`[NotificationService] Dispatching SMS to ${mobilePhone} for job ${requestId} (isFallback=${isFallback})...`);
       const smsDispatch = await SmsManagerService.sendSms(mobilePhone, smsMessage, {
         jobId: requestId,
         staffId,
@@ -262,6 +269,7 @@ ${payload.jobUrl}`;
       });
       smsResult = smsDispatch.result;
       if (smsDispatch.fallbackUsed) fallbackUsed = true;
+      console.log(`[NotificationService] SMS dispatch result: status=${smsResult.status}, provider=${smsResult.provider}, msgId=${smsResult.providerMessageId}, error=${smsResult.errorMessage || 'none'}`);
 
       this.logNotification({
         jobId: requestId,
@@ -282,6 +290,7 @@ ${payload.jobUrl}`;
     // Helper: Send WhatsApp
     const dispatchWhatsApp = async (isFallback = false) => {
       if (!waEnabled || !waNumber) return;
+      console.log(`[NotificationService] Dispatching WhatsApp to ${waNumber} for job ${requestId}...`);
       whatsappResult = await waProvider.sendWhatsApp(waNumber, payload);
 
       this.logNotification({
@@ -316,7 +325,8 @@ ${payload.jobUrl}`;
         }
       } else {
         // WhatsApp is not live/configured: Deliver via SMS immediately so staff receives the job link!
-        await dispatchSms();
+        fallbackUsed = true;
+        await dispatchSms(true);
       }
     } else {
       // 3. SMS Preferred (or default)

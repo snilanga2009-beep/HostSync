@@ -301,10 +301,19 @@ router.post('/notifications/verify-srilanka-sms', authenticateToken, requireRole
         try {
           const p = JSON.parse(row.value_json);
           token = p.sriLankaSms?.apiKey || p.sriLankaSms?.apiToken || CONFIG.SRI_LANKA_SMS.API_KEY || CONFIG.SRI_LANKA_SMS.API_TOKEN;
-          if (!userId) userId = p.sriLankaSms?.userId;
+          if (!userId) userId = p.sriLankaSms?.userId || CONFIG.SRI_LANKA_SMS.USER_ID;
+          if (!apiBaseUrl) apiBaseUrl = p.sriLankaSms?.apiBaseUrl || CONFIG.SRI_LANKA_SMS.API_BASE_URL;
+          if (!apiUrl) apiUrl = p.sriLankaSms?.apiUrl || CONFIG.SRI_LANKA_SMS.API_URL;
+          if (!senderId) senderId = p.sriLankaSms?.senderId || CONFIG.SRI_LANKA_SMS.SENDER_ID;
         } catch (e) {}
       }
     }
+
+    if (!userId) userId = CONFIG.SRI_LANKA_SMS.USER_ID;
+    if (!apiBaseUrl) apiBaseUrl = CONFIG.SRI_LANKA_SMS.API_BASE_URL;
+    if (!apiUrl) apiUrl = CONFIG.SRI_LANKA_SMS.API_URL;
+    if (!senderId) senderId = CONFIG.SRI_LANKA_SMS.SENDER_ID;
+    if (!token) token = CONFIG.SRI_LANKA_SMS.API_KEY || CONFIG.SRI_LANKA_SMS.API_TOKEN;
 
     if (!token) {
       return res.status(400).json({ success: false, error: 'API Key (or Bearer Token) is required for verification.' });
