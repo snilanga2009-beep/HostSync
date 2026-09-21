@@ -30,6 +30,12 @@ router.get('/notifications/providers', authenticateToken, (req: AuthRequest, res
       } catch (e) {}
     }
 
+    const slEnabled = stored.sriLankaSms?.enabled !== undefined ? stored.sriLankaSms.enabled : CONFIG.SRI_LANKA_SMS.ENABLED;
+    const slProvider = stored.sriLankaSms?.provider || CONFIG.SRI_LANKA_SMS.PROVIDER || 'textlk';
+    const slToken = stored.sriLankaSms?.apiToken || CONFIG.SRI_LANKA_SMS.API_TOKEN || '';
+    const slSender = stored.sriLankaSms?.senderId || CONFIG.SRI_LANKA_SMS.SENDER_ID || 'HOTELNAME';
+    const slUrl = stored.sriLankaSms?.apiUrl || CONFIG.SRI_LANKA_SMS.API_URL || 'https://app.text.lk/api/v3/sms/send';
+
     const twilioSid = stored.twilioSms?.accountSid || CONFIG.TWILIO.ACCOUNT_SID || '';
     const twilioAuth = stored.twilioSms?.authToken || CONFIG.TWILIO.AUTH_TOKEN || '';
     const twilioPhone = stored.twilioSms?.phoneNumber || CONFIG.TWILIO.PHONE_NUMBER || '';
@@ -44,8 +50,24 @@ router.get('/notifications/providers', authenticateToken, (req: AuthRequest, res
     const metaLang = stored.whatsapp?.meta?.templateLanguage || 'en_US';
     const metaVerifyToken = stored.whatsapp?.meta?.verifyToken || 'resortcare_webhook_secret_2026';
 
+    const smsProvider =
+      stored.smsProvider ||
+      (slEnabled ? 'srilanka' : (twilioSid ? 'twilio' : (stored.mode === 'simulator' ? 'simulator' : 'disabled')));
+    const smsFallbackEnabled =
+      stored.smsFallbackEnabled !== undefined ? stored.smsFallbackEnabled : CONFIG.SRI_LANKA_SMS.FALLBACK_ENABLED;
+
     res.json({
-      mode: stored.mode || (twilioSid ? 'live' : 'simulator'),
+      mode: stored.mode || (twilioSid || slToken ? 'live' : 'simulator'),
+      smsProvider,
+      smsFallbackEnabled,
+      sriLankaSms: {
+        enabled: Boolean(slEnabled),
+        provider: slProvider,
+        senderId: slSender,
+        apiUrl: slUrl,
+        hasApiToken: Boolean(slToken),
+        maskedApiToken: maskSecret(slToken)
+      },
       twilioSms: {
         enabled: stored.twilioSms?.enabled !== undefined ? stored.twilioSms.enabled : Boolean(twilioSid && twilioAuth),
         accountSid: twilioSid,
@@ -74,7 +96,8 @@ router.get('/notifications/providers', authenticateToken, (req: AuthRequest, res
       },
       webhooks: {
         twilioStatusUrl: `${CONFIG.BASE_URL.replace('5173', '5000')}/api/webhooks/twilio/status`,
-        whatsappWebhookUrl: `${CONFIG.BASE_URL.replace('5173', '5000')}/api/webhooks/whatsapp`
+        whatsappWebhookUrl: `${CONFIG.BASE_URL.replace('5173', '5000')}/api/webhooks/whatsapp`,
+        sriLankaSmsWebhookUrl: `${CONFIG.BASE_URL.replace('5173', '5000')}/api/webhooks/sri-lanka-sms`
       }
     });
   } catch (err: any) {
@@ -100,6 +123,11 @@ router.put('/notifications/providers', authenticateToken, requireRole(['Hotel Ad
     const payload = req.body;
 
     // Preserve existing secret tokens if masked or not provided
+    let newSlToken = payload.sriLankaSms?.apiToken;
+    if (!newSlToken || newSlToken.startsWith('••••') || newSlToken.trim() === '') {
+      newSlToken = existing.sriLankaSms?.apiToken || CONFIG.SRI_LANKA_SMS.API_TOKEN || '';
+    }
+
     let newTwilioAuth = payload.twilioSms?.authToken;
     if (!newTwilioAuth || newTwilioAuth.startsWith('••••') || newTwilioAuth.trim() === '') {
       newTwilioAuth = existing.twilioSms?.authToken || CONFIG.TWILIO.AUTH_TOKEN || '';
@@ -112,6 +140,15 @@ router.put('/notifications/providers', authenticateToken, requireRole(['Hotel Ad
 
     const mergedSettings = {
       mode: payload.mode || 'simulator',
+      smsProvider: payload.smsProvider || 'srilanka',
+      smsFallbackEnabled: payload.smsFallbackEnabled !== undefined ? Boolean(payload.smsFallbackEnabled) : true,
+      sriLankaSms: {
+        enabled: payload.sriLankaSms?.enabled !== undefined ? Boolean(payload.sriLankaSms.enabled) : true,
+        provider: payload.sriLankaSms?.provider || 'textlk',
+        apiToken: newSlToken,
+        senderId: (payload.sriLankaSms?.senderId || 'HOTELNAME').trim(),
+        apiUrl: (payload.sriLankaSms?.apiUrl || 'https://app.text.lk/api/v3/sms/send').trim()
+      },
       twilioSms: {
         enabled: Boolean(payload.twilioSms?.enabled),
         accountSid: payload.twilioSms?.accountSid || '',
@@ -209,6 +246,107 @@ router.post('/notifications/verify-twilio', authenticateToken, requireRole(['Hot
     });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message || 'Error connecting to Twilio API' });
+  }
+});
+
+// POST /api/settings/notifications/verify-srilanka-sms - Live Sri Lanka SMS API verification & Balance Check
+router.post('/notifications/verify-srilanka-sms', authenticateToken, requireRole(['Hotel Admin', 'Super Admin']), async (req: AuthRequest, res: Response) => {
+  try {
+    let { apiToken, apiUrl } = req.body;
+    if (!apiToken || apiToken.startsWith('••••')) {
+      const hotel = db.prepare(`SELECT id FROM hotels LIMIT 1`).get() as any;
+      const row = db.prepare(`SELECT value_json FROM settings WHERE hotel_id = ? AND category = 'notifications' AND key = 'providers'`).get(hotel?.id) as any;
+      if (row?.value_json) {
+        try {
+          const p = JSON.parse(row.value_json);
+          apiToken = p.sriLankaSms?.apiToken || CONFIG.SRI_LANKA_SMS.API_TOKEN;
+        } catch (e) {}
+      }
+    }
+
+    if (!apiToken) {
+      return res.status(400).json({ success: false, error: 'Sri Lanka SMS API Token is required for verification.' });
+    }
+
+    const { SriLankaSmsProvider } = await import('../services/notification/sms/srilanka.provider');
+    const provider = new SriLankaSmsProvider({ apiToken, apiUrl });
+    const balanceInfo = await provider.getBalance();
+
+    res.json({
+      success: true,
+      provider: 'textlk',
+      status: 'active',
+      balance: balanceInfo?.balance ?? null,
+      currency: balanceInfo?.currency || 'LKR',
+      message: 'Successfully connected to Sri Lanka SMS API (Text.lk).'
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message || 'Error connecting to Sri Lanka SMS API' });
+  }
+});
+
+// POST /api/settings/notifications/sms/test - Send Test SMS with step diagnostics
+router.post('/notifications/sms/test', authenticateToken, requireRole(['Hotel Admin', 'Super Admin']), async (req: AuthRequest, res: Response) => {
+  try {
+    const { phoneNumber, message } = req.body;
+    if (!phoneNumber) {
+      return res.status(400).json({ success: false, error: 'Phone number is required for test SMS.' });
+    }
+
+    const hotel = db.prepare(`SELECT id, name FROM hotels LIMIT 1`).get() as any;
+    const { SriLankaSmsProvider } = await import('../services/notification/sms/srilanka.provider');
+    const { SmsManagerService } = await import('../services/notification/sms/sms-manager.service');
+
+    const slValidator = new SriLankaSmsProvider();
+    const isSlValid = slValidator.validatePhoneNumber(phoneNumber);
+    const normalizedNumber = slValidator.normalizePhoneNumber(phoneNumber);
+
+    const testMsg = message || `🔔 [${hotel?.name || 'Hotel'} Test SMS] Hello! This is a test dispatch from the Hotel Admin Panel. Normalization: ${normalizedNumber} at ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}.`;
+
+    const dispatch = await SmsManagerService.sendSms(phoneNumber, testMsg, {
+      hotelId: hotel?.id || 'hotel-ocean-pearl'
+    });
+
+    res.json({
+      success: dispatch.result.success,
+      recipient: normalizedNumber || phoneNumber,
+      rawRecipient: phoneNumber,
+      provider: dispatch.result.provider,
+      status: dispatch.result.status,
+      fallbackUsed: dispatch.fallbackUsed,
+      steps: {
+        phoneValid: isSlValid,
+        apiConnected: dispatch.result.status !== 'FAILED' || dispatch.result.errorCode !== 'NETWORK_OR_RUNTIME_ERROR',
+        smsAccepted: dispatch.result.success
+      },
+      error: dispatch.result.errorMessage,
+      result: dispatch.result
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message || 'Failed to dispatch test SMS' });
+  }
+});
+
+// GET /api/settings/notifications/sms/balance - Fetch live account balance
+router.get('/notifications/sms/balance', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const hotel = db.prepare(`SELECT id FROM hotels LIMIT 1`).get() as any;
+    const { SmsManagerService } = await import('../services/notification/sms/sms-manager.service');
+    const primary = SmsManagerService.getPrimaryProvider(hotel?.id || 'hotel-ocean-pearl');
+
+    if (!primary) {
+      return res.json({ success: false, message: 'SMS is currently disabled.' });
+    }
+
+    const balanceInfo = await primary.getBalance();
+    res.json({
+      success: true,
+      provider: primary.name,
+      balance: balanceInfo?.balance ?? null,
+      currency: balanceInfo?.currency || 'LKR'
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 

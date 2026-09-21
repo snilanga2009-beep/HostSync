@@ -26,6 +26,14 @@ export const CONFIG = {
     WHATSAPP_ENABLED: process.env.TWILIO_WHATSAPP_ENABLED === 'true',
     CONTENT_TEMPLATE_SID: process.env.TWILIO_CONTENT_TEMPLATE_SID || 'HXb5b62575e6e4d61dc12a0049f15430ed'
   },
+  SRI_LANKA_SMS: {
+    ENABLED: process.env.SRI_LANKA_SMS_ENABLED === 'true',
+    PROVIDER: process.env.SRI_LANKA_SMS_PROVIDER || 'textlk',
+    API_TOKEN: process.env.SRI_LANKA_SMS_API_TOKEN || '',
+    SENDER_ID: process.env.SRI_LANKA_SMS_SENDER_ID || 'HOTELNAME',
+    API_URL: process.env.SRI_LANKA_SMS_API_URL || 'https://app.text.lk/api/v3/sms/send',
+    FALLBACK_ENABLED: process.env.SMS_FALLBACK_ENABLED === 'true'
+  },
   NOTIFICATION: {
     DEFAULT_JOB_EXPIRY_HOURS: parseInt(process.env.JOB_TOKEN_EXPIRY_HOURS || '24', 10),
     MAX_RETRY_ATTEMPTS: 3

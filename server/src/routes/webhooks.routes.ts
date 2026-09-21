@@ -138,4 +138,75 @@ router.post('/whatsapp', (req: Request, res: Response) => {
   }
 });
 
+// POST /api/webhooks/sri-lanka-sms - Delivery status callback for Sri Lanka SMS (Text.lk)
+router.post(['/sri-lanka-sms', '/textlk/status'], (req: Request, res: Response) => {
+  try {
+    const payload = req.body || {};
+    const messageId = payload.uid || payload.id || payload.message_id || payload.custom_id;
+    const rawStatus = (payload.status || payload.delivery_status || '').toLowerCase();
+    const recipient = payload.recipient || payload.to || payload.phone || '';
+    const errorMsg = payload.error || payload.reason || payload.message || null;
+
+    if (!messageId && !recipient) {
+      return res.status(200).json({ status: 'ignored', reason: 'Missing message ID and recipient' });
+    }
+
+    let status = 'sent';
+    let standardNotifStatus = 'SENT';
+    if (rawStatus === 'delivered' || rawStatus === 'success') {
+      status = 'delivered';
+      standardNotifStatus = 'DELIVERED';
+    } else if (rawStatus === 'failed' || rawStatus === 'rejected' || rawStatus === 'error') {
+      status = 'failed';
+      standardNotifStatus = 'FAILED';
+    } else if (rawStatus === 'undelivered') {
+      status = 'undelivered';
+      standardNotifStatus = 'FAILED';
+    }
+
+    // 1. Update sms_logs
+    if (messageId) {
+      db.prepare(`
+        UPDATE sms_logs
+        SET status = ?,
+            delivered_at = CASE WHEN ? = 'delivered' THEN datetime('now') ELSE delivered_at END,
+            failed_at = CASE WHEN ? IN ('failed', 'undelivered') THEN datetime('now') ELSE failed_at END,
+            error_message = COALESCE(?, error_message)
+        WHERE provider_message_id = ? OR id = ?
+      `).run(status, status, status, errorMsg, messageId, messageId);
+    }
+
+    // 2. Update notification_logs (for backward compatibility and Front Office dashboards)
+    const logRecord = db.prepare(`
+      SELECT * FROM notification_logs WHERE provider_message_id = ?
+    `).get(messageId) as any;
+
+    if (logRecord) {
+      db.prepare(`
+        UPDATE notification_logs
+        SET status = ?,
+            delivered_at = CASE WHEN ? = 'DELIVERED' THEN datetime('now') ELSE delivered_at END,
+            failed_at = CASE WHEN ? = 'FAILED' THEN datetime('now') ELSE failed_at END,
+            error_message = COALESCE(?, error_message)
+        WHERE id = ?
+      `).run(standardNotifStatus, standardNotifStatus, standardNotifStatus, errorMsg, logRecord.id);
+
+      // 3. Broadcast real-time delivery update via SSE
+      sseService.broadcast('NOTIFICATION_STATUS_UPDATED', {
+        logId: logRecord.id,
+        jobId: logRecord.job_id,
+        channel: 'SMS',
+        status: standardNotifStatus,
+        recipient: recipient || logRecord.recipient
+      });
+    }
+
+    res.status(200).json({ success: true, message: 'Status updated' });
+  } catch (err: any) {
+    console.error('Sri Lanka SMS webhook error:', err);
+    res.status(500).json({ error: 'Webhook processing error' });
+  }
+});
+
 export default router;
+

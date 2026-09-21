@@ -19,7 +19,11 @@ import {
   Zap,
   PhoneCall,
   Save,
-  Info
+  Info,
+  Globe,
+  Radio,
+  Building,
+  Coins
 } from 'lucide-react';
 
 export const NotificationGatewaySettings: React.FC = () => {
@@ -30,6 +34,34 @@ export const NotificationGatewaySettings: React.FC = () => {
 
   // Mode: 'live' | 'simulator'
   const [mode, setMode] = useState<'live' | 'simulator'>('simulator');
+
+  // SMS Provider Selection: 'srilanka' | 'twilio' | 'disabled'
+  const [smsProvider, setSmsProvider] = useState<'srilanka' | 'twilio' | 'disabled'>('srilanka');
+  const [smsFallbackEnabled, setSmsFallbackEnabled] = useState(true);
+
+  // Sri Lanka SMS (Text.lk)
+  const [sriLankaEnabled, setSriLankaEnabled] = useState(true);
+  const [sriLankaProvider, setSriLankaProvider] = useState('textlk');
+  const [sriLankaApiToken, setSriLankaApiToken] = useState('');
+  const [sriLankaSenderId, setSriLankaSenderId] = useState('HOTELNAME');
+  const [sriLankaApiUrl, setSriLankaApiUrl] = useState('https://app.text.lk/api/v3/sms/send');
+  const [hasStoredSriLankaToken, setHasStoredSriLankaToken] = useState(false);
+  const [showSriLankaToken, setShowSriLankaToken] = useState(false);
+  const [verifyingSriLanka, setVerifyingSriLanka] = useState(false);
+  const [sriLankaVerifyResult, setSriLankaVerifyResult] = useState<{ success: boolean; message: string; balance?: number | null; currency?: string } | null>(null);
+  const [sriLankaBalance, setSriLankaBalance] = useState<{ balance: number; currency: string } | null>(null);
+  const [checkingBalance, setCheckingBalance] = useState(false);
+
+  // Test SMS State
+  const [testSmsPhone, setTestSmsPhone] = useState('');
+  const [testSmsMessage, setTestSmsMessage] = useState('');
+  const [testingSmsSend, setTestingSmsSend] = useState(false);
+  const [testSmsResult, setTestSmsResult] = useState<{
+    success: boolean;
+    recipient: string;
+    steps?: { phoneValid: boolean; apiConnected: boolean; smsAccepted: boolean };
+    error?: string;
+  } | null>(null);
 
   // Twilio SMS
   const [twilioEnabled, setTwilioEnabled] = useState(false);
@@ -73,13 +105,32 @@ export const NotificationGatewaySettings: React.FC = () => {
   // Webhooks
   const [webhooks, setWebhooks] = useState({
     twilioStatusUrl: '',
-    whatsappWebhookUrl: ''
+    whatsappWebhookUrl: '',
+    sriLankaWebhookUrl: ''
   });
 
   const loadSettings = async () => {
     try {
       const res = await api.get<any>('/settings/notifications/providers');
       setMode(res.mode || 'simulator');
+
+      if (res.smsProvider) {
+        setSmsProvider(res.smsProvider);
+      }
+      if (typeof res.smsFallbackEnabled === 'boolean') {
+        setSmsFallbackEnabled(res.smsFallbackEnabled);
+      }
+
+      if (res.sriLankaSms) {
+        setSriLankaEnabled(Boolean(res.sriLankaSms.enabled));
+        setSriLankaProvider(res.sriLankaSms.provider || 'textlk');
+        setSriLankaSenderId(res.sriLankaSms.senderId || 'HOTELNAME');
+        setSriLankaApiUrl(res.sriLankaSms.apiUrl || 'https://app.text.lk/api/v3/sms/send');
+        setHasStoredSriLankaToken(Boolean(res.sriLankaSms.hasApiToken));
+        if (res.sriLankaSms.hasApiToken) {
+          setSriLankaApiToken('••••••••••••');
+        }
+      }
 
       if (res.twilioSms) {
         setTwilioEnabled(Boolean(res.twilioSms.enabled));
@@ -119,7 +170,8 @@ export const NotificationGatewaySettings: React.FC = () => {
       const apiOrigin = currentOrigin.includes(':5173') ? currentOrigin.replace(':5173', ':5000') : currentOrigin;
       setWebhooks({
         twilioStatusUrl: res.webhooks?.twilioStatusUrl || `${apiOrigin}/api/webhooks/twilio/status`,
-        whatsappWebhookUrl: res.webhooks?.whatsappWebhookUrl || `${apiOrigin}/api/webhooks/whatsapp`
+        whatsappWebhookUrl: res.webhooks?.whatsappWebhookUrl || `${apiOrigin}/api/webhooks/whatsapp`,
+        sriLankaWebhookUrl: res.webhooks?.sriLankaWebhookUrl || `${apiOrigin}/api/webhooks/sri-lanka-sms`
       });
     } catch (e) {
       console.error('Failed to load notification provider settings', e);
@@ -136,6 +188,77 @@ export const NotificationGatewaySettings: React.FC = () => {
     navigator.clipboard.writeText(text);
     setCopiedWebhook(id);
     setTimeout(() => setCopiedWebhook(null), 2500);
+  };
+
+  const handleVerifySriLanka = async () => {
+    setVerifyingSriLanka(true);
+    setSriLankaVerifyResult(null);
+    try {
+      const res = await api.post<any>('/settings/notifications/verify-srilanka-sms', {
+        apiToken: sriLankaApiToken.startsWith('••••') ? '' : sriLankaApiToken,
+        apiUrl: sriLankaApiUrl,
+        senderId: sriLankaSenderId
+      });
+      setSriLankaVerifyResult({
+        success: true,
+        message: res.message || 'Sri Lanka SMS API verified successfully!',
+        balance: res.balance,
+        currency: res.currency || 'LKR'
+      });
+      if (typeof res.balance === 'number') {
+        setSriLankaBalance({ balance: res.balance, currency: res.currency || 'LKR' });
+      }
+    } catch (err: any) {
+      setSriLankaVerifyResult({
+        success: false,
+        message: err.message || 'Sri Lanka SMS verification failed. Please check API Token and URL.'
+      });
+    } finally {
+      setVerifyingSriLanka(false);
+    }
+  };
+
+  const handleCheckBalance = async () => {
+    setCheckingBalance(true);
+    try {
+      const res = await api.get<any>('/settings/notifications/sms/balance');
+      if (res.success && typeof res.balance === 'number') {
+        setSriLankaBalance({ balance: res.balance, currency: res.currency || 'LKR' });
+      } else {
+        alert(res.message || 'Unable to retrieve SMS balance.');
+      }
+    } catch (err: any) {
+      alert(err.message || 'Failed to check SMS balance.');
+    } finally {
+      setCheckingBalance(false);
+    }
+  };
+
+  const handleTestSriLankaSms = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!testSmsPhone) return;
+    setTestingSmsSend(true);
+    setTestSmsResult(null);
+    try {
+      const res = await api.post<any>('/settings/notifications/sms/test', {
+        recipientPhone: testSmsPhone,
+        message: testSmsMessage || undefined
+      });
+      setTestSmsResult({
+        success: Boolean(res.success),
+        recipient: res.recipient || testSmsPhone,
+        steps: res.steps,
+        error: res.error
+      });
+    } catch (err: any) {
+      setTestSmsResult({
+        success: false,
+        recipient: testSmsPhone,
+        error: err.message || 'Test SMS request failed.'
+      });
+    } finally {
+      setTestingSmsSend(false);
+    }
   };
 
   const handleVerifyTwilio = async () => {
@@ -222,6 +345,15 @@ export const NotificationGatewaySettings: React.FC = () => {
     try {
       await api.put('/settings/notifications/providers', {
         mode,
+        smsProvider,
+        smsFallbackEnabled,
+        sriLankaSms: {
+          enabled: sriLankaEnabled,
+          provider: sriLankaProvider,
+          apiToken: sriLankaApiToken.startsWith('••••') ? '' : sriLankaApiToken,
+          senderId: sriLankaSenderId,
+          apiUrl: sriLankaApiUrl
+        },
         twilioSms: {
           enabled: twilioEnabled,
           accountSid: twilioAccountSid,
@@ -331,7 +463,7 @@ export const NotificationGatewaySettings: React.FC = () => {
 
       {/* Main Configuration Form */}
       <form onSubmit={handleSaveAll} className="space-y-6">
-        {/* ================= 1. TWILIO SMS GATEWAY ================= */}
+        {/* ================= SMS PROVIDER ARCHITECTURE ================= */}
         <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-xs space-y-5">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-slate-100">
             <div className="flex items-center gap-2.5">
@@ -339,122 +471,459 @@ export const NotificationGatewaySettings: React.FC = () => {
                 SMS
               </div>
               <div>
-                <h3 className="text-sm font-extrabold text-slate-900">Twilio SMS Provider Setup</h3>
-                <p className="text-xs text-slate-500">Official Twilio Programmable SMS API integration for staff task alerts</p>
+                <h3 className="text-sm font-extrabold text-slate-900">SMS Gateway Provider Architecture</h3>
+                <p className="text-xs text-slate-500">Configure Sri Lanka SMS gateway (Text.lk REST API) or Twilio international provider</p>
               </div>
             </div>
 
-            <label className="flex items-center gap-2 text-xs font-bold text-slate-800 cursor-pointer select-none self-start sm:self-auto">
-              <input
-                type="checkbox"
-                checked={twilioEnabled}
-                onChange={(e) => setTwilioEnabled(e.target.checked)}
-                className="w-4 h-4 rounded text-brand-600 focus:ring-brand-500"
-              />
-              <span>Enable Twilio SMS</span>
-            </label>
+            {/* Provider selection badge */}
+            <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-extrabold ${
+              smsProvider === 'srilanka'
+                ? 'bg-amber-100 text-amber-900'
+                : smsProvider === 'twilio'
+                ? 'bg-sky-100 text-sky-900'
+                : 'bg-slate-100 text-slate-600'
+            }`}>
+              {smsProvider === 'srilanka' ? '🇱🇰 Sri Lanka SMS Active' : smsProvider === 'twilio' ? '🌐 Twilio Active' : '🚫 SMS Disabled'}
+            </span>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                Twilio Account SID *
-              </label>
-              <input
-                type="text"
-                placeholder="ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-                value={twilioAccountSid}
-                onChange={(e) => setTwilioAccountSid(e.target.value.trim())}
-                className="w-full text-xs font-mono p-2.5 border border-slate-200 rounded-xl focus:ring-2 focus:ring-brand-500 focus:outline-none"
-              />
-              <span className="text-[10px] text-slate-400 mt-1 block">Starts with 'AC' from Twilio Console</span>
+          {/* 3-Way Choice: Sri Lanka SMS / Twilio / Disabled */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div
+              onClick={() => setSmsProvider('srilanka')}
+              className={`p-4 rounded-xl border-2 cursor-pointer transition-all flex flex-col justify-between ${
+                smsProvider === 'srilanka'
+                  ? 'border-amber-500 bg-amber-50/40 shadow-xs'
+                  : 'border-slate-200 bg-slate-50/50 hover:bg-slate-50'
+              }`}
+            >
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-lg">🇱🇰</span>
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-800">
+                  Recommended for SL
+                </span>
+              </div>
+              <h4 className="text-xs font-bold text-slate-900">Sri Lanka SMS (Text.lk)</h4>
+              <p className="text-[11px] text-slate-500 mt-1 leading-relaxed">
+                Direct TRCSL sender ID integration, lowest rate per SMS, and auto-formatting for 07X mobile numbers.
+              </p>
             </div>
 
-            <div>
-              <div className="flex items-center justify-between mb-1">
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
-                  Twilio Auth Token *
+            <div
+              onClick={() => setSmsProvider('twilio')}
+              className={`p-4 rounded-xl border-2 cursor-pointer transition-all flex flex-col justify-between ${
+                smsProvider === 'twilio'
+                  ? 'border-sky-500 bg-sky-50/40 shadow-xs'
+                  : 'border-slate-200 bg-slate-50/50 hover:bg-slate-50'
+              }`}
+            >
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-lg">🌐</span>
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-sky-100 text-sky-800">
+                  Global
+                </span>
+              </div>
+              <h4 className="text-xs font-bold text-slate-900">Twilio SMS</h4>
+              <p className="text-[11px] text-slate-500 mt-1 leading-relaxed">
+                Twilio Programmable SMS API with international carrier coverage and global number routing.
+              </p>
+            </div>
+
+            <div
+              onClick={() => setSmsProvider('disabled')}
+              className={`p-4 rounded-xl border-2 cursor-pointer transition-all flex flex-col justify-between ${
+                smsProvider === 'disabled'
+                  ? 'border-slate-500 bg-slate-100 shadow-xs'
+                  : 'border-slate-200 bg-slate-50/50 hover:bg-slate-50'
+              }`}
+            >
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-lg">🚫</span>
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-200 text-slate-700">
+                  Free-Tier
+                </span>
+              </div>
+              <h4 className="text-xs font-bold text-slate-900">Disabled</h4>
+              <p className="text-[11px] text-slate-500 mt-1 leading-relaxed">
+                Turn off SMS dispatch. Zero cellular messaging costs. App alerts & WhatsApp continue operating.
+              </p>
+            </div>
+          </div>
+
+          {/* ================= SRI LANKA SMS (TEXT.LK) CONFIGURATION ================= */}
+          {smsProvider === 'srilanka' && (
+            <div className="space-y-4 pt-2 border-t border-slate-100">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-bold text-slate-800 uppercase tracking-wider">
+                    Text.lk REST API Credentials
+                  </span>
+                  <span className="text-[10px] font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
+                    Replaceable Sri Lanka Gateway
+                  </span>
+                </div>
+
+                <label className="flex items-center gap-2 text-xs font-bold text-slate-800 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={sriLankaEnabled}
+                    onChange={(e) => setSriLankaEnabled(e.target.checked)}
+                    className="w-4 h-4 rounded text-brand-600 focus:ring-brand-500"
+                  />
+                  <span>Enable Sri Lanka SMS</span>
                 </label>
-                {hasStoredTwilioAuth && (
-                  <span className="text-[10px] text-emerald-700 font-bold bg-emerald-50 px-1.5 py-0.2 rounded">
-                    Secret Stored
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
+                      Text.lk API Token *
+                    </label>
+                    {hasStoredSriLankaToken && (
+                      <span className="text-[10px] text-emerald-700 font-bold bg-emerald-50 px-1.5 py-0.2 rounded">
+                        Secret Stored
+                      </span>
+                    )}
+                  </div>
+                  <div className="relative">
+                    <input
+                      type={showSriLankaToken ? 'text' : 'password'}
+                      placeholder="Enter Text.lk Bearer API Token"
+                      value={sriLankaApiToken}
+                      onChange={(e) => setSriLankaApiToken(e.target.value.trim())}
+                      className="w-full text-xs font-mono p-2.5 pr-10 border border-slate-200 rounded-xl focus:ring-2 focus:ring-brand-500 focus:outline-none"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowSriLankaToken(!showSriLankaToken)}
+                      className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-600"
+                    >
+                      {showSriLankaToken ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
+                  <span className="text-[10px] text-slate-400 mt-1 block">From app.text.lk &rarr; API & Integrations &rarr; API Tokens</span>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                    TRCSL Sender ID (Mask) *
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="HOTELNAME"
+                    value={sriLankaSenderId}
+                    onChange={(e) => setSriLankaSenderId(e.target.value.trim().toUpperCase())}
+                    className="w-full text-xs font-mono p-2.5 border border-slate-200 rounded-xl focus:ring-2 focus:ring-brand-500 focus:outline-none"
+                  />
+                  <span className="text-[10px] text-slate-400 mt-1 block">Your TRCSL approved Sender Mask (max 11 chars alphanumeric)</span>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                  API Endpoint URL
+                </label>
+                <input
+                  type="url"
+                  placeholder="https://app.text.lk/api/v3/sms/send"
+                  value={sriLankaApiUrl}
+                  onChange={(e) => setSriLankaApiUrl(e.target.value.trim())}
+                  className="w-full text-xs font-mono p-2.5 border border-slate-200 rounded-xl focus:ring-2 focus:ring-brand-500 focus:outline-none"
+                />
+                <span className="text-[10px] text-slate-400 mt-1 block">Default: https://app.text.lk/api/v3/sms/send</span>
+              </div>
+
+              {/* Action buttons: Verify Connection & Check Balance */}
+              <div className="flex flex-col sm:flex-row items-center gap-3 pt-1">
+                <button
+                  type="button"
+                  onClick={handleVerifySriLanka}
+                  disabled={verifyingSriLanka || (!sriLankaApiToken && !hasStoredSriLankaToken)}
+                  className="w-full sm:w-auto py-2.5 px-4 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl text-xs font-bold transition-colors flex items-center justify-center gap-1.5 disabled:opacity-50"
+                >
+                  {verifyingSriLanka ? <Loader2 className="w-4 h-4 animate-spin text-brand-600" /> : <ShieldCheck className="w-4 h-4 text-emerald-600" />}
+                  Verify Text.lk Connection
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleCheckBalance}
+                  disabled={checkingBalance}
+                  className="w-full sm:w-auto py-2.5 px-4 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 rounded-xl text-xs font-bold transition-colors flex items-center justify-center gap-1.5 disabled:opacity-50"
+                >
+                  {checkingBalance ? <Loader2 className="w-4 h-4 animate-spin text-amber-600" /> : <Coins className="w-4 h-4 text-amber-600" />}
+                  Check SMS Wallet Balance
+                </button>
+
+                {sriLankaBalance && (
+                  <span className="px-3 py-1.5 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-xl text-xs font-extrabold flex items-center gap-1.5">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                    Balance: {sriLankaBalance.currency} {sriLankaBalance.balance.toLocaleString()}
                   </span>
                 )}
               </div>
-              <div className="relative">
+
+              {sriLankaVerifyResult && (
+                <div className={`p-3 rounded-xl text-xs flex items-center gap-2 ${
+                  sriLankaVerifyResult.success ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' : 'bg-rose-50 text-rose-800 border border-rose-200'
+                }`}>
+                  {sriLankaVerifyResult.success ? <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" /> : <XCircle className="w-4 h-4 text-rose-600 shrink-0" />}
+                  <span>{sriLankaVerifyResult.message}</span>
+                </div>
+              )}
+
+              {/* Automatic Fallback to Twilio Checkbox */}
+              <div className="pt-3 border-t border-slate-100 flex items-center justify-between">
+                <div>
+                  <h4 className="text-xs font-bold text-slate-900">Automatic Fallback to Twilio SMS</h4>
+                  <p className="text-[11px] text-slate-500 mt-0.5">
+                    If Sri Lanka SMS fails or account runs out of credits, automatically retry delivery via Twilio SMS so technicians never miss an urgent task.
+                  </p>
+                </div>
                 <input
-                  type={showTwilioToken ? 'text' : 'password'}
-                  placeholder="Enter 32-character Auth Token"
-                  value={twilioAuthToken}
-                  onChange={(e) => setTwilioAuthToken(e.target.value.trim())}
-                  className="w-full text-xs font-mono p-2.5 pr-10 border border-slate-200 rounded-xl focus:ring-2 focus:ring-brand-500 focus:outline-none"
+                  type="checkbox"
+                  checked={smsFallbackEnabled}
+                  onChange={(e) => setSmsFallbackEnabled(e.target.checked)}
+                  className="w-4 h-4 rounded text-brand-600 focus:ring-brand-500 cursor-pointer"
                 />
-                <button
-                  type="button"
-                  onClick={() => setShowTwilioToken(!showTwilioToken)}
-                  className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-600"
-                >
-                  {showTwilioToken ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                </button>
               </div>
-              <span className="text-[10px] text-slate-400 mt-1 block">Leave as dots to preserve currently stored token</span>
-            </div>
-          </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                Twilio From Phone Number *
-              </label>
-              <input
-                type="tel"
-                placeholder="+13055550199"
-                value={twilioPhone}
-                onChange={(e) => setTwilioPhone(e.target.value.trim())}
-                className="w-full text-xs font-mono p-2.5 border border-slate-200 rounded-xl focus:ring-2 focus:ring-brand-500 focus:outline-none"
-              />
-              <span className="text-[10px] text-slate-400 mt-1 block">E.164 format with country code (e.g. +1...)</span>
-            </div>
+              {/* Text.lk Webhook URL */}
+              <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                    Text.lk Delivery Report (DLR) Webhook URL
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => handleCopy(webhooks.sriLankaWebhookUrl, 'sl-hook')}
+                    className="text-[11px] font-bold text-brand-600 hover:underline flex items-center gap-1"
+                  >
+                    {copiedWebhook === 'sl-hook' ? <Check className="w-3 h-3 text-emerald-600" /> : <Copy className="w-3 h-3" />}
+                    {copiedWebhook === 'sl-hook' ? 'Copied' : 'Copy URL'}
+                  </button>
+                </div>
+                <p className="text-xs font-mono text-slate-700 break-all select-all">{webhooks.sriLankaWebhookUrl}</p>
+              </div>
 
-            <div className="flex items-end gap-2">
-              <button
-                type="button"
-                onClick={handleVerifyTwilio}
-                disabled={verifyingTwilio || !twilioAccountSid}
-                className="w-full py-2.5 px-4 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl text-xs font-bold transition-colors flex items-center justify-center gap-1.5 disabled:opacity-50"
-              >
-                {verifyingTwilio ? <Loader2 className="w-4 h-4 animate-spin text-brand-600" /> : <ShieldCheck className="w-4 h-4 text-sky-600" />}
-                Verify Twilio Credentials
-              </button>
-            </div>
-          </div>
+              {/* Dedicated Sri Lanka Test SMS Console */}
+              <div className="p-4 bg-amber-50/50 border border-amber-200 rounded-xl space-y-3">
+                <div className="flex items-center gap-2">
+                  <Smartphone className="w-4 h-4 text-amber-700" />
+                  <h4 className="text-xs font-extrabold text-amber-950 uppercase tracking-wider">
+                    Sri Lanka SMS Test & Diagnostics
+                  </h4>
+                </div>
+                <p className="text-[11px] text-amber-800">
+                  Dispatch an immediate test SMS to any Sri Lankan mobile number (e.g. 0771234567, 94771234567) to test normalization and gateway connectivity.
+                </p>
 
-          {twilioVerifyResult && (
-            <div className={`p-3 rounded-xl text-xs flex items-center gap-2 ${
-              twilioVerifyResult.success ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' : 'bg-rose-50 text-rose-800 border border-rose-200'
-            }`}>
-              {twilioVerifyResult.success ? <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" /> : <XCircle className="w-4 h-4 text-rose-600 shrink-0" />}
-              <span>{twilioVerifyResult.message}</span>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  <div className="sm:col-span-1">
+                    <input
+                      type="tel"
+                      placeholder="07XXXXXXXX or 947XXXXXXXX"
+                      value={testSmsPhone}
+                      onChange={(e) => setTestSmsPhone(e.target.value.trim())}
+                      className="w-full text-xs font-mono p-2 border border-amber-300 rounded-xl bg-white focus:outline-none focus:ring-2 focus:ring-amber-500"
+                    />
+                  </div>
+                  <div className="sm:col-span-2 flex gap-2">
+                    <input
+                      type="text"
+                      placeholder="Optional test message (or leave blank for standard alert)"
+                      value={testSmsMessage}
+                      onChange={(e) => setTestSmsMessage(e.target.value)}
+                      className="flex-1 text-xs p-2 border border-amber-300 rounded-xl bg-white focus:outline-none focus:ring-2 focus:ring-amber-500"
+                    />
+                    <button
+                      type="button"
+                      onClick={handleTestSriLankaSms}
+                      disabled={testingSmsSend || !testSmsPhone}
+                      className="py-2 px-4 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-bold transition-colors flex items-center gap-1.5 disabled:opacity-50 shrink-0"
+                    >
+                      {testingSmsSend ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
+                      Send Test
+                    </button>
+                  </div>
+                </div>
+
+                {testSmsResult && (
+                  <div className={`p-3 rounded-xl text-xs space-y-1.5 ${
+                    testSmsResult.success ? 'bg-emerald-50 text-emerald-900 border border-emerald-200' : 'bg-rose-50 text-rose-900 border border-rose-200'
+                  }`}>
+                    <div className="flex items-center gap-2 font-bold">
+                      {testSmsResult.success ? <CheckCircle2 className="w-4 h-4 text-emerald-600" /> : <XCircle className="w-4 h-4 text-rose-600" />}
+                      <span>{testSmsResult.success ? 'Test SMS Accepted by Sri Lanka Gateway!' : 'Test SMS Dispatch Failed'}</span>
+                      <span className="text-[10px] font-mono text-slate-500">({testSmsResult.recipient})</span>
+                    </div>
+
+                    {testSmsResult.steps && (
+                      <div className="flex flex-wrap gap-2 pt-1 text-[10px]">
+                        <span className={`px-2 py-0.5 rounded font-bold ${testSmsResult.steps.phoneValid ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'}`}>
+                          {testSmsResult.steps.phoneValid ? '✓ Phone Valid (SL Format)' : '✗ Invalid SL Phone'}
+                        </span>
+                        <span className={`px-2 py-0.5 rounded font-bold ${testSmsResult.steps.apiConnected ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'}`}>
+                          {testSmsResult.steps.apiConnected ? '✓ Text.lk API Authenticated' : '✗ API Auth Failed'}
+                        </span>
+                        <span className={`px-2 py-0.5 rounded font-bold ${testSmsResult.steps.smsAccepted ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'}`}>
+                          {testSmsResult.steps.smsAccepted ? '✓ Gateway Accepted' : '✗ Gateway Rejected'}
+                        </span>
+                      </div>
+                    )}
+
+                    {testSmsResult.error && (
+                      <p className="text-[11px] text-rose-700 font-medium">{testSmsResult.error}</p>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
           )}
 
-          {/* Twilio Status Callback Webhook */}
-          <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-1.5">
-            <div className="flex items-center justify-between">
-              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
-                Twilio Status Callback Webhook URL (Paste into Twilio Console)
-              </span>
-              <button
-                type="button"
-                onClick={() => handleCopy(webhooks.twilioStatusUrl, 'twilio-hook')}
-                className="text-[11px] font-bold text-brand-600 hover:underline flex items-center gap-1"
-              >
-                {copiedWebhook === 'twilio-hook' ? <Check className="w-3 h-3 text-emerald-600" /> : <Copy className="w-3 h-3" />}
-                {copiedWebhook === 'twilio-hook' ? 'Copied' : 'Copy URL'}
-              </button>
+          {/* ================= TWILIO SMS CONFIGURATION (PRIMARY OR FALLBACK) ================= */}
+          {(smsProvider === 'twilio' || (smsProvider === 'srilanka' && smsFallbackEnabled)) && (
+            <div className={`space-y-4 pt-3 border-t border-slate-100 ${smsProvider === 'srilanka' ? 'bg-slate-50/50 p-4 rounded-xl border border-slate-200' : ''}`}>
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div>
+                  <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider">
+                    {smsProvider === 'srilanka' ? 'Twilio SMS Fallback Configuration' : 'Twilio SMS Credentials'}
+                  </h4>
+                  <p className="text-[11px] text-slate-500">
+                    {smsProvider === 'srilanka'
+                      ? 'Used automatically if Text.lk is unreachable or balance is exhausted.'
+                      : 'Twilio is your primary dispatch provider.'}
+                  </p>
+                </div>
+
+                <label className="flex items-center gap-2 text-xs font-bold text-slate-800 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={twilioEnabled}
+                    onChange={(e) => setTwilioEnabled(e.target.checked)}
+                    className="w-4 h-4 rounded text-brand-600 focus:ring-brand-500"
+                  />
+                  <span>Enable Twilio</span>
+                </label>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                    Twilio Account SID *
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+                    value={twilioAccountSid}
+                    onChange={(e) => setTwilioAccountSid(e.target.value.trim())}
+                    className="w-full text-xs font-mono p-2.5 border border-slate-200 rounded-xl focus:ring-2 focus:ring-brand-500 focus:outline-none"
+                  />
+                  <span className="text-[10px] text-slate-400 mt-1 block">Starts with 'AC' from Twilio Console</span>
+                </div>
+
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
+                      Twilio Auth Token *
+                    </label>
+                    {hasStoredTwilioAuth && (
+                      <span className="text-[10px] text-emerald-700 font-bold bg-emerald-50 px-1.5 py-0.2 rounded">
+                        Secret Stored
+                      </span>
+                    )}
+                  </div>
+                  <div className="relative">
+                    <input
+                      type={showTwilioToken ? 'text' : 'password'}
+                      placeholder="Enter 32-character Auth Token"
+                      value={twilioAuthToken}
+                      onChange={(e) => setTwilioAuthToken(e.target.value.trim())}
+                      className="w-full text-xs font-mono p-2.5 pr-10 border border-slate-200 rounded-xl focus:ring-2 focus:ring-brand-500 focus:outline-none"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowTwilioToken(!showTwilioToken)}
+                      className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-600"
+                    >
+                      {showTwilioToken ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
+                  <span className="text-[10px] text-slate-400 mt-1 block">Leave as dots to preserve currently stored token</span>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                    Twilio From Phone Number *
+                  </label>
+                  <input
+                    type="tel"
+                    placeholder="+13055550199"
+                    value={twilioPhone}
+                    onChange={(e) => setTwilioPhone(e.target.value.trim())}
+                    className="w-full text-xs font-mono p-2.5 border border-slate-200 rounded-xl focus:ring-2 focus:ring-brand-500 focus:outline-none"
+                  />
+                  <span className="text-[10px] text-slate-400 mt-1 block">E.164 format with country code (e.g. +1...)</span>
+                </div>
+
+                <div className="flex items-end gap-2">
+                  <button
+                    type="button"
+                    onClick={handleVerifyTwilio}
+                    disabled={verifyingTwilio || !twilioAccountSid}
+                    className="w-full py-2.5 px-4 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl text-xs font-bold transition-colors flex items-center justify-center gap-1.5 disabled:opacity-50"
+                  >
+                    {verifyingTwilio ? <Loader2 className="w-4 h-4 animate-spin text-brand-600" /> : <ShieldCheck className="w-4 h-4 text-sky-600" />}
+                    Verify Twilio Credentials
+                  </button>
+                </div>
+              </div>
+
+              {twilioVerifyResult && (
+                <div className={`p-3 rounded-xl text-xs flex items-center gap-2 ${
+                  twilioVerifyResult.success ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' : 'bg-rose-50 text-rose-800 border border-rose-200'
+                }`}>
+                  {twilioVerifyResult.success ? <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" /> : <XCircle className="w-4 h-4 text-rose-600 shrink-0" />}
+                  <span>{twilioVerifyResult.message}</span>
+                </div>
+              )}
+
+              {/* Twilio Status Callback Webhook */}
+              <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                    Twilio Status Callback Webhook URL (Paste into Twilio Console)
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => handleCopy(webhooks.twilioStatusUrl, 'twilio-hook')}
+                    className="text-[11px] font-bold text-brand-600 hover:underline flex items-center gap-1"
+                  >
+                    {copiedWebhook === 'twilio-hook' ? <Check className="w-3 h-3 text-emerald-600" /> : <Copy className="w-3 h-3" />}
+                    {copiedWebhook === 'twilio-hook' ? 'Copied' : 'Copy URL'}
+                  </button>
+                </div>
+                <p className="text-xs font-mono text-slate-700 break-all select-all">{webhooks.twilioStatusUrl}</p>
+              </div>
             </div>
-            <p className="text-xs font-mono text-slate-700 break-all select-all">{webhooks.twilioStatusUrl}</p>
-          </div>
+          )}
+
+          {/* ================= DISABLED NOTICE ================= */}
+          {smsProvider === 'disabled' && (
+            <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-600 flex items-start gap-3">
+              <Info className="w-5 h-5 text-slate-500 shrink-0 mt-0.5" />
+              <div>
+                <h4 className="font-bold text-slate-800">SMS Dispatch Disabled (Zero-Cost Free-Tier Mode)</h4>
+                <p className="mt-1 leading-relaxed text-slate-500">
+                  Maintenance task dispatches will not attempt SMS delivery. Technicians will receive tasks via real-time browser dashboard updates, SSE events, and WhatsApp (if enabled). No carrier charges will be incurred.
+                </p>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* ================= 2. DIRECT WHATSAPP PROVIDER (META CLOUD API & TWILIO) ================= */}

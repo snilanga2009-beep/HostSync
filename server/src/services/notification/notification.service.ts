@@ -12,6 +12,7 @@ import {
 import { TwilioSMSProvider, TwilioWhatsAppProvider } from './twilio.provider';
 import { SimulatorSMSProvider, SimulatorWhatsAppProvider } from './simulator.provider';
 import { MetaWhatsAppProvider } from './meta-whatsapp.provider';
+import { SmsManagerService } from './sms/sms-manager.service';
 
 export class NotificationService {
   private static twilioSMS = new TwilioSMSProvider();
@@ -200,14 +201,14 @@ export class NotificationService {
 
     // Construct short SMS message
     const smsMessage =
-`${payload.hotelName}:
-New maintenance job.
-
+`HOTEL JOB
 Room: ${payload.roomNumber}
-Problem: ${payload.itemName} - ${payload.problemType}
+Service: ${payload.jobType || 'Maintenance'}
+Item: ${payload.itemName}
+Problem: ${payload.problemType}
 Priority: ${payload.priority.toUpperCase()}
 
-View and accept:
+View & Accept:
 ${payload.jobUrl}`;
 
     const mobilePhone = (staff.phone || staff.user_phone || '').trim();
@@ -243,12 +244,19 @@ ${payload.jobUrl}`;
       }
 
       if (smsEnabled && mobilePhone) {
-        smsResult = await smsProvider.sendSMS(mobilePhone, smsMessage);
+        const smsDispatch = await SmsManagerService.sendSms(mobilePhone, smsMessage, {
+          jobId: requestId,
+          staffId,
+          hotelId: request.hotel_id
+        });
+        smsResult = smsDispatch.result;
+        if (smsDispatch.fallbackUsed) fallbackUsed = true;
+
         this.logNotification({
           jobId: requestId,
           staffId,
           channel: 'SMS',
-          provider: smsProvider.name,
+          provider: smsResult.provider || 'SMS',
           recipient: mobilePhone,
           messageTemplate: 'Job Notification SMS (Emergency)',
           providerMessageId: smsResult.providerMessageId,
@@ -280,13 +288,18 @@ ${payload.jobUrl}`;
         // Check for WhatsApp failure and trigger automatic fallback to SMS
         if (!whatsappResult.success && fallbackEnabled && smsEnabled && mobilePhone) {
           fallbackUsed = true;
-          smsResult = await smsProvider.sendSMS(mobilePhone, smsMessage);
+          const smsDispatch = await SmsManagerService.sendSms(mobilePhone, smsMessage, {
+            jobId: requestId,
+            staffId,
+            hotelId: request.hotel_id
+          });
+          smsResult = smsDispatch.result;
 
           this.logNotification({
             jobId: requestId,
             staffId,
             channel: 'SMS',
-            provider: smsProvider.name,
+            provider: smsResult.provider || 'SMS',
             recipient: mobilePhone,
             messageTemplate: 'Job Notification SMS (Fallback)',
             providerMessageId: smsResult.providerMessageId,
@@ -299,12 +312,19 @@ ${payload.jobUrl}`;
         }
       } else if (smsEnabled && mobilePhone) {
         // SMS preferred
-        smsResult = await smsProvider.sendSMS(mobilePhone, smsMessage);
+        const smsDispatch = await SmsManagerService.sendSms(mobilePhone, smsMessage, {
+          jobId: requestId,
+          staffId,
+          hotelId: request.hotel_id
+        });
+        smsResult = smsDispatch.result;
+        if (smsDispatch.fallbackUsed) fallbackUsed = true;
+
         this.logNotification({
           jobId: requestId,
           staffId,
           channel: 'SMS',
-          provider: smsProvider.name,
+          provider: smsResult.provider || 'SMS',
           recipient: mobilePhone,
           messageTemplate: 'Job Notification SMS',
           providerMessageId: smsResult.providerMessageId,
@@ -452,10 +472,11 @@ ${payload.jobUrl}`;
     const msg = params.message || `🔔 [ResortCare Test] This is a verification test from ResortCare System Admin Panel.`;
 
     if (params.channel === 'SMS') {
-      const res = await smsProvider.sendSMS(params.recipientPhone, msg);
+      const smsDispatch = await SmsManagerService.sendSms(params.recipientPhone, msg, { hotelId });
+      const res = smsDispatch.result;
       this.logNotification({
         channel: 'SMS',
-        provider: smsProvider.name,
+        provider: res.provider || 'SMS',
         recipient: params.recipientPhone,
         messageTemplate: 'Admin Direct Test (SMS)',
         providerMessageId: res.providerMessageId,
@@ -514,11 +535,13 @@ ${payload.jobUrl}`;
 `${request.hotel_name}
 
 Your Room ${request.room_number} maintenance request status: ${statusTitle.toUpperCase()}.
-${params.technicianName ? `Assigned: ${params.technicianName}\\n` : ''}
+${params.technicianName ? `Assigned: ${params.technicianName}\n` : ''}
 Track live: ${trackUrl}`;
 
-      const { sms: smsProvider } = this.getProviders(request.hotel_id);
-      await smsProvider.sendSMS(recipientPhone, message);
+      await SmsManagerService.sendSms(recipientPhone, message, {
+        hotelId: request.hotel_id,
+        jobId: params.requestId
+      });
     } catch (e) {
       // Non-blocking
     }

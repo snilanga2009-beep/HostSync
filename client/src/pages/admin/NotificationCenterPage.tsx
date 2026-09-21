@@ -77,6 +77,33 @@ export const NotificationCenterPage: React.FC = () => {
   const [testStaffId, setTestStaffId] = useState('');
   const [testingChannel, setTestingChannel] = useState<'SMS' | 'WhatsApp' | null>(null);
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
+  const [retryingId, setRetryingId] = useState<string | null>(null);
+
+  const handleRetrySms = async (id: string) => {
+    setRetryingId(id);
+    try {
+      const res = await api.post<any>(`/notifications/sms/retry/${id}`);
+      if (res.success) {
+        setTestResult({
+          success: true,
+          message: 'SMS retry queued and dispatched successfully!'
+        });
+        await loadData();
+      } else {
+        setTestResult({
+          success: false,
+          message: res.error || 'Failed to retry SMS dispatch.'
+        });
+      }
+    } catch (err: any) {
+      setTestResult({
+        success: false,
+        message: err.message || 'Error executing SMS retry.'
+      });
+    } finally {
+      setRetryingId(null);
+    }
+  };
 
   const loadData = async () => {
     try {
@@ -331,12 +358,13 @@ export const NotificationCenterPage: React.FC = () => {
                 <th className="py-3 px-4">Recipient Phone</th>
                 <th className="py-3 px-4">Delivery Status</th>
                 <th className="py-3 px-4">Fallback</th>
+                <th className="py-3 px-4 text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {logs.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="py-12 text-center text-slate-400 font-medium">
+                  <td colSpan={8} className="py-12 text-center text-slate-400 font-medium">
                     No notification logs match your filters.
                   </td>
                 </tr>
@@ -426,6 +454,23 @@ export const NotificationCenterPage: React.FC = () => {
                         </span>
                       ) : (
                         <span className="text-slate-400 text-[11px]">-</span>
+                      )}
+                    </td>
+
+                    {/* Actions */}
+                    <td className="py-3.5 px-4 text-right">
+                      {log.status === 'FAILED' ? (
+                        <button
+                          onClick={() => handleRetrySms(log.id)}
+                          disabled={retryingId === log.id}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-lg text-[11px] font-bold transition-colors disabled:opacity-50"
+                          title="Retry SMS dispatch"
+                        >
+                          {retryingId === log.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <RotateCcw className="w-3 h-3" />}
+                          Retry
+                        </button>
+                      ) : (
+                        <span className="text-slate-300 text-[11px]">-</span>
                       )}
                     </td>
                   </tr>

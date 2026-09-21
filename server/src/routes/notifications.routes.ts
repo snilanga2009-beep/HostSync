@@ -190,5 +190,69 @@ router.post('/guest-consent', (req: AuthRequest, res: Response) => {
   }
 });
 
+// POST /api/notifications/sms/retry/:id - Retry failed SMS dispatch
+router.post('/sms/retry/:id', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    // Check notification_logs first
+    let record = db.prepare(`SELECT * FROM notification_logs WHERE id = ?`).get(id) as any;
+    let message = '';
+
+    if (record) {
+      try {
+        const p = JSON.parse(record.payload_json || '{}');
+        message = p.smsMessage || record.message_template || '';
+      } catch {}
+    } else {
+      // Check sms_logs
+      record = db.prepare(`SELECT * FROM sms_logs WHERE id = ?`).get(id) as any;
+      if (record) {
+        message = record.message;
+      }
+    }
+
+    if (!record) {
+      return res.status(404).json({ error: 'SMS log record not found.' });
+    }
+
+    if (!message) {
+      message = `🔔 [Hotel Update] Retried task notification for recipient: ${record.recipient}`;
+    }
+
+    const { SmsManagerService } = await import('../services/notification/sms/sms-manager.service');
+    const dispatch = await SmsManagerService.sendSms(record.recipient, message, {
+      jobId: record.job_id,
+      staffId: record.staff_id
+    });
+
+    // Update retry count
+    if (record.channel) {
+      db.prepare(`
+        UPDATE notification_logs
+        SET retry_count = retry_count + 1,
+            status = ?,
+            error_message = ?,
+            provider_message_id = COALESCE(?, provider_message_id)
+        WHERE id = ?
+      `).run(
+        dispatch.result.status,
+        dispatch.result.errorMessage || null,
+        dispatch.result.providerMessageId || null,
+        id
+      );
+    }
+
+    res.json({
+      success: dispatch.result.success,
+      status: dispatch.result.status,
+      provider: dispatch.result.provider,
+      fallbackUsed: dispatch.fallbackUsed,
+      result: dispatch.result
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Retry failed' });
+  }
+});
+
 export default router;
 

@@ -466,3 +466,48 @@ CREATE INDEX IF NOT EXISTS idx_notif_logs_staff ON notification_logs(staff_id);
 CREATE INDEX IF NOT EXISTS idx_notif_logs_status ON notification_logs(status);
 CREATE INDEX IF NOT EXISTS idx_guest_notif_prefs_token ON guest_notification_preferences(tracking_token);
 
+-- 27. Dedicated SMS Logs (Multi-Provider: Sri Lanka Text.lk, Twilio, etc.)
+CREATE TABLE IF NOT EXISTS sms_logs (
+    id TEXT PRIMARY KEY,
+    job_id TEXT,
+    staff_id TEXT,
+    recipient TEXT NOT NULL,
+    provider TEXT NOT NULL, -- textlk, twilio, simulator
+    sender_id TEXT,
+    message TEXT NOT NULL,
+    provider_message_id TEXT,
+    status TEXT NOT NULL, -- queued, sent, delivered, failed, undelivered
+    error_code TEXT,
+    error_message TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    sent_at DATETIME,
+    delivered_at DATETIME,
+    failed_at DATETIME
+);
+
+-- 28. SMS Providers Registry & Dynamic Health Cache
+CREATE TABLE IF NOT EXISTS sms_providers (
+    id TEXT PRIMARY KEY,
+    hotel_id TEXT NOT NULL DEFAULT 'hotel-ocean-pearl',
+    provider_key TEXT NOT NULL, -- textlk, twilio, simulator
+    provider_name TEXT NOT NULL,
+    is_enabled INTEGER DEFAULT 0,
+    is_primary INTEGER DEFAULT 0,
+    api_token_encrypted TEXT,
+    sender_id TEXT,
+    api_url TEXT,
+    cached_balance REAL,
+    currency TEXT DEFAULT 'LKR',
+    last_status TEXT DEFAULT 'active',
+    last_error TEXT,
+    last_tested_at DATETIME,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_sms_logs_job ON sms_logs(job_id);
+CREATE INDEX IF NOT EXISTS idx_sms_logs_staff ON sms_logs(staff_id);
+CREATE INDEX IF NOT EXISTS idx_sms_logs_status ON sms_logs(status);
+CREATE INDEX IF NOT EXISTS idx_sms_logs_provider ON sms_logs(provider);
+CREATE INDEX IF NOT EXISTS idx_sms_providers_hotel ON sms_providers(hotel_id);
+

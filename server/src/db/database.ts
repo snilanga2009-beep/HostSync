@@ -65,6 +65,52 @@ export function initDatabase() {
     addColumnIfNotExists('maintenance_requests', 'arrived_at DATETIME');
     addColumnIfNotExists('maintenance_requests', 'started_at DATETIME');
 
+    // Dedicated SMS Logs & Providers tables
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS sms_logs (
+          id TEXT PRIMARY KEY,
+          job_id TEXT,
+          staff_id TEXT,
+          recipient TEXT NOT NULL,
+          provider TEXT NOT NULL,
+          sender_id TEXT,
+          message TEXT NOT NULL,
+          provider_message_id TEXT,
+          status TEXT NOT NULL,
+          error_code TEXT,
+          error_message TEXT,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          sent_at DATETIME,
+          delivered_at DATETIME,
+          failed_at DATETIME
+      );
+
+      CREATE TABLE IF NOT EXISTS sms_providers (
+          id TEXT PRIMARY KEY,
+          hotel_id TEXT NOT NULL DEFAULT 'hotel-ocean-pearl',
+          provider_key TEXT NOT NULL,
+          provider_name TEXT NOT NULL,
+          is_enabled INTEGER DEFAULT 0,
+          is_primary INTEGER DEFAULT 0,
+          api_token_encrypted TEXT,
+          sender_id TEXT,
+          api_url TEXT,
+          cached_balance REAL,
+          currency TEXT DEFAULT 'LKR',
+          last_status TEXT DEFAULT 'active',
+          last_error TEXT,
+          last_tested_at DATETIME,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_sms_logs_job ON sms_logs(job_id);
+      CREATE INDEX IF NOT EXISTS idx_sms_logs_staff ON sms_logs(staff_id);
+      CREATE INDEX IF NOT EXISTS idx_sms_logs_status ON sms_logs(status);
+      CREATE INDEX IF NOT EXISTS idx_sms_logs_provider ON sms_logs(provider);
+      CREATE INDEX IF NOT EXISTS idx_sms_providers_hotel ON sms_providers(hotel_id);
+    `);
+
     console.log('✅ Database schema and migrations initialized successfully');
   } else {
     console.error('❌ Schema file not found at:', schemaPath);
