@@ -1,12 +1,26 @@
 services:
   - type: web
-    name: resortcare-hotel-qr
-    env: docker
-    plan: free
-    region: oregon
-    dockerfilePath: ./Dockerfile
+    name: resortcare-api
+    runtime: node
+    plan: starter
+    region: singapore
+    buildCommand: npm run build:server
+    startCommand: npm run start
+    healthCheckPath: /api/health
+    disk:
+      name: resortcare-data
+      mountPath: /var/data
+      sizeGB: 1
     envVars:
+      - key: NODE_ENV
+        value: production
       - key: PORT
-        value: 5000
+        value: 10000
+      - key: DB_PATH
+        value: /var/data/resortcare.db
+      - key: UPLOAD_DIR
+        value: /var/data/uploads
+      - key: BASE_URL
+        value: https://hotel-qr-phi.vercel.app
       - key: JWT_SECRET
         generateValue: true

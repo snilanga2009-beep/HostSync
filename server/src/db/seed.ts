@@ -466,8 +466,52 @@ async function seed() {
         frontOfficeSound: true,
         technicianSound: true,
         emailEnabled: false,
-        smsEnabled: false,
-        whatsappEnabled: false
+        smsEnabled: true,
+        whatsappEnabled: true
+      }
+    },
+    {
+      category: 'notifications',
+      key: 'providers',
+      value: {
+        mode: 'live',
+        publicBaseUrl: 'https://hotel-qr-phi.vercel.app',
+        smsProvider: 'srilanka',
+        smsFallbackEnabled: true,
+        sriLankaSms: {
+          enabled: true,
+          provider: 'textlk',
+          userId: '2561',
+          apiKey: '4b60f716-fa34-4634-bfde-8567b33b1458',
+          apiToken: '4b60f716-fa34-4634-bfde-8567b33b1458',
+          senderId: 'SMSlenzDEMO',
+          apiBaseUrl: 'https://smslenz.lk/api',
+          apiUrl: 'https://smslenz.lk/api'
+        },
+        twilioSms: {
+          enabled: false,
+          accountSid: '',
+          authToken: '',
+          phoneNumber: ''
+        },
+        whatsapp: {
+          provider: 'direct_meta',
+          autoFallbackToSms: true,
+          meta: {
+            enabled: false,
+            phoneNumberId: '',
+            wabaId: '',
+            accessToken: '',
+            displayPhoneNumber: '',
+            templateName: 'resortcare_job_dispatch',
+            templateLanguage: 'en_US',
+            verifyToken: 'resortcare_webhook_secret_2026'
+          },
+          twilio: {
+            whatsappSender: 'whatsapp:+14155238886',
+            contentTemplateSid: 'HXb5b62575e6e4d61dc12a0049f15430ed'
+          }
+        }
       }
     }
   ];
@@ -494,7 +538,11 @@ async function seed() {
   console.log('✅ ResortCare Database seeded successfully with realistic resort demo data!');
 }
 
-seed().catch(err => {
-  console.error('❌ Seeding failed:', err);
-  process.exit(1);
-});
+export { seed };
+
+if (process.argv[1] && (process.argv[1].endsWith('seed.ts') || process.argv[1].endsWith('seed.js'))) {
+  seed().catch(err => {
+    console.error('❌ Seeding failed:', err);
+    process.exit(1);
+  });
+}

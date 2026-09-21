@@ -112,6 +112,17 @@ export function initDatabase() {
     `);
 
     console.log('✅ Database schema and migrations initialized successfully');
+
+    // Auto-seed on first startup if hotels table is empty
+    try {
+      const hotelCheck = db.prepare('SELECT count(*) as count FROM hotels').get() as any;
+      if (!hotelCheck || hotelCheck.count === 0) {
+        console.log('🌱 Database is empty on first boot. Running initial seed...');
+        import('./seed').then(m => {
+          if (m.seed) m.seed();
+        }).catch(err => console.error('Auto-seed failed:', err));
+      }
+    } catch (e) {}
   } else {
     console.error('❌ Schema file not found at:', schemaPath);
   }
