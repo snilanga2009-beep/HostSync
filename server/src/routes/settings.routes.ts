@@ -163,10 +163,10 @@ router.put('/notifications/providers', authenticateToken, requireRole(['Hotel Ad
         apiUrl: (payload.sriLankaSms?.apiUrl || payload.sriLankaSms?.apiBaseUrl || 'https://app.text.lk/api/v3/sms/send').trim()
       },
       twilioSms: {
-        enabled: Boolean(payload.twilioSms?.enabled),
-        accountSid: payload.twilioSms?.accountSid || '',
-        authToken: newTwilioAuth,
-        phoneNumber: payload.twilioSms?.phoneNumber || ''
+        enabled: payload.smsProvider === 'twilio' || Boolean(payload.twilioSms?.enabled),
+        accountSid: (payload.twilioSms?.accountSid || '').trim(),
+        authToken: newTwilioAuth.trim(),
+        phoneNumber: (payload.twilioSms?.phoneNumber || '').trim()
       },
       whatsapp: {
         provider: payload.whatsapp?.provider || 'simulator',
@@ -219,6 +219,7 @@ router.put('/notifications/providers', authenticateToken, requireRole(['Hotel Ad
 router.post('/notifications/verify-twilio', authenticateToken, requireRole(['Hotel Admin', 'Super Admin']), async (req: AuthRequest, res: Response) => {
   try {
     let { accountSid, authToken } = req.body;
+    accountSid = (accountSid || '').trim();
 
     if (!authToken || authToken.startsWith('••••')) {
       const hotel = db.prepare(`SELECT id FROM hotels LIMIT 1`).get() as any;
@@ -232,6 +233,8 @@ router.post('/notifications/verify-twilio', authenticateToken, requireRole(['Hot
       if (!authToken) authToken = CONFIG.TWILIO.AUTH_TOKEN;
     }
 
+    authToken = (authToken || '').trim();
+
     if (!accountSid || !authToken) {
       return res.status(400).json({ success: false, error: 'Both Twilio Account SID and Auth Token are required for verification.' });
     }
@@ -241,7 +244,12 @@ router.post('/notifications/verify-twilio', authenticateToken, requireRole(['Hot
       headers: { Authorization: authHeader }
     });
 
-    const data = await response.json() as any;
+    let data: any = {};
+    try {
+      data = await response.json();
+    } catch {
+      data = { message: `Twilio returned HTTP ${response.status}` };
+    }
 
     if (!response.ok) {
       return res.status(400).json({
@@ -251,11 +259,29 @@ router.post('/notifications/verify-twilio', authenticateToken, requireRole(['Hot
       });
     }
 
+    // Also attempt to fetch balance
+    let balance: number | null = null;
+    let currency = 'USD';
+    try {
+      const balRes = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Balance.json`, {
+        headers: { Authorization: authHeader }
+      });
+      if (balRes.ok) {
+        const balData = await balRes.json() as any;
+        if (balData.balance !== undefined) {
+          balance = parseFloat(balData.balance);
+          currency = balData.currency || 'USD';
+        }
+      }
+    } catch {}
+
     res.json({
       success: true,
       friendlyName: data.friendly_name || 'Twilio Account',
       status: data.status,
-      type: data.type
+      type: data.type,
+      balance,
+      currency
     });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message || 'Error connecting to Twilio API' });
@@ -302,29 +328,85 @@ router.post('/notifications/verify-srilanka-sms', authenticateToken, requireRole
   }
 });
 
-// POST /api/settings/notifications/sms/test - Send Test SMS with step diagnostics
+// POST /api/settings/notifications/sms/test - Send Test SMS with step diagnostics (Sri Lanka or Twilio)
 router.post('/notifications/sms/test', authenticateToken, requireRole(['Hotel Admin', 'Super Admin']), async (req: AuthRequest, res: Response) => {
   try {
     const rawNumber = (req.body.phoneNumber || req.body.recipientPhone || req.body.phone || req.body.to || '').trim();
-    const { message, userId, apiKey, apiToken, apiBaseUrl, apiUrl, senderId } = req.body;
+    const { message, userId, apiKey, apiToken, apiBaseUrl, apiUrl, senderId, accountSid, authToken, fromNumber, provider: reqProvider } = req.body;
     if (!rawNumber) {
       return res.status(400).json({ success: false, error: 'Phone number is required for test SMS.' });
     }
 
     const hotel = db.prepare(`SELECT id, name FROM hotels LIMIT 1`).get() as any;
     const hotelId = hotel?.id || 'hotel-ocean-pearl';
-    const { SriLankaSmsProvider } = await import('../services/notification/sms/srilanka.provider');
     const { SmsManagerService } = await import('../services/notification/sms/sms-manager.service');
 
     // Fetch existing stored settings for fallback credentials if masked or omitted
     const row = db.prepare(`SELECT value_json FROM settings WHERE hotel_id = ? AND category = 'notifications' AND key = 'providers'`).get(hotelId) as any;
-    let storedSl: any = {};
+    let storedSettings: any = {};
     if (row?.value_json) {
       try {
-        const p = JSON.parse(row.value_json);
-        storedSl = p.sriLankaSms || {};
+        storedSettings = JSON.parse(row.value_json);
       } catch {}
     }
+
+    const targetProvider = (reqProvider || (storedSettings.smsProvider === 'twilio' ? 'twilio' : 'srilanka')).toLowerCase();
+
+    // ================= 1. TWILIO SMS TEST =================
+    if (targetProvider === 'twilio') {
+      const { TwilioSmsAdapter } = await import('../services/notification/sms/twilio-sms.adapter');
+      const storedTwilio = storedSettings.twilioSms || {};
+
+      const sid = (accountSid && !accountSid.startsWith('••••'))
+        ? accountSid
+        : (storedTwilio.accountSid || CONFIG.TWILIO.ACCOUNT_SID || '');
+      const auth = (authToken && !authToken.startsWith('••••'))
+        ? authToken
+        : (storedTwilio.authToken || CONFIG.TWILIO.AUTH_TOKEN || '');
+      const phone = fromNumber || req.body.phoneNumber || storedTwilio.phoneNumber || CONFIG.TWILIO.PHONE_NUMBER || '';
+
+      const twilioAdapter = new TwilioSmsAdapter({
+        accountSid: String(sid).trim(),
+        authToken: String(auth).trim(),
+        phoneNumber: String(phone).trim()
+      });
+
+      const isPhoneValid = twilioAdapter.validatePhoneNumber(rawNumber);
+      const normalizedNumber = twilioAdapter.normalizePhoneNumber(rawNumber);
+      const testMsg = message || `🔔 [${hotel?.name || 'Hotel'} Twilio Test] Hello! This is a test dispatch from Hotel Admin Panel via Twilio SMS. Normalization: ${normalizedNumber} at ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}.`;
+
+      const dispatchResult = await twilioAdapter.sendSms(rawNumber, testMsg);
+
+      SmsManagerService.logSms({
+        recipient: normalizedNumber || rawNumber,
+        provider: 'Twilio SMS',
+        senderId: phone,
+        message: testMsg,
+        providerMessageId: dispatchResult.providerMessageId,
+        status: dispatchResult.success ? 'sent' : 'failed',
+        errorCode: dispatchResult.errorCode,
+        errorMessage: dispatchResult.errorMessage
+      });
+
+      return res.json({
+        success: dispatchResult.success,
+        recipient: normalizedNumber || rawNumber,
+        rawRecipient: rawNumber,
+        provider: 'Twilio SMS',
+        status: dispatchResult.status,
+        steps: {
+          phoneValid: isPhoneValid,
+          apiConnected: dispatchResult.status !== 'FAILED' || dispatchResult.errorCode !== 'TWILIO_NOT_CONFIGURED',
+          smsAccepted: dispatchResult.success
+        },
+        error: dispatchResult.errorMessage,
+        result: dispatchResult
+      });
+    }
+
+    // ================= 2. SRI LANKA SMS TEST =================
+    const storedSl = storedSettings.sriLankaSms || {};
+    const { SriLankaSmsProvider } = await import('../services/notification/sms/srilanka.provider');
 
     const effectiveUserId = (userId !== undefined && userId !== '') ? userId : (storedSl.userId || CONFIG.SRI_LANKA_SMS.USER_ID || '');
     const keyCandidate = apiKey || apiToken;
@@ -397,17 +479,30 @@ router.post('/notifications/sms/test', authenticateToken, requireRole(['Hotel Ad
   }
 });
 
-// GET /api/settings/notifications/sms/balance - Fetch live account balance
+// GET /api/settings/notifications/sms/balance - Fetch live account balance (Twilio or Sri Lanka SMS)
 router.get('/notifications/sms/balance', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
     const hotel = db.prepare(`SELECT id FROM hotels LIMIT 1`).get() as any;
+    const hotelId = hotel?.id || 'hotel-ocean-pearl';
     const { SmsManagerService } = await import('../services/notification/sms/sms-manager.service');
-    let provider = SmsManagerService.getPrimaryProvider(hotel?.id || 'hotel-ocean-pearl');
+    const requested = (req.query.provider as string || '').toLowerCase();
 
-    if (!provider || !provider.getBalance) {
+    let provider: any = null;
+    if (requested === 'twilio') {
+      const twilioConfig = SmsManagerService.getHotelSmsConfig(hotelId).twilioConfig;
+      const { TwilioSmsAdapter } = await import('../services/notification/sms/twilio-sms.adapter');
+      provider = new TwilioSmsAdapter(twilioConfig);
+    } else if (requested === 'srilanka' || requested === 'textlk' || requested === 'smslenz') {
+      const slConfig = SmsManagerService.getHotelSmsConfig(hotelId).slConfig;
       const { SriLankaSmsProvider } = await import('../services/notification/sms/srilanka.provider');
-      const slConfig = SmsManagerService.getHotelSmsConfig(hotel?.id || 'hotel-ocean-pearl').slConfig;
       provider = new SriLankaSmsProvider(slConfig);
+    } else {
+      provider = SmsManagerService.getPrimaryProvider(hotelId);
+      if (!provider || !provider.getBalance) {
+        const slConfig = SmsManagerService.getHotelSmsConfig(hotelId).slConfig;
+        const { SriLankaSmsProvider } = await import('../services/notification/sms/srilanka.provider');
+        provider = new SriLankaSmsProvider(slConfig);
+      }
     }
 
     const balanceInfo = await provider.getBalance();
@@ -415,7 +510,7 @@ router.get('/notifications/sms/balance', authenticateToken, async (req: AuthRequ
       success: true,
       provider: provider.name,
       balance: balanceInfo?.balance ?? null,
-      currency: balanceInfo?.currency || 'LKR'
+      currency: balanceInfo?.currency || (requested === 'twilio' ? 'USD' : 'LKR')
     });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });

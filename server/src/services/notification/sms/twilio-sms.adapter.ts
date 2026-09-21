@@ -19,6 +19,10 @@ export class TwilioSmsAdapter implements SmsProvider {
         cleaned = '+' + cleaned.substring(2);
       } else if (cleaned.startsWith('0') && cleaned.length === 10) {
         cleaned = '+94' + cleaned.substring(1);
+      } else if (cleaned.startsWith('7') && cleaned.length === 9) {
+        cleaned = '+94' + cleaned;
+      } else if (cleaned.startsWith('94') && cleaned.length === 11) {
+        cleaned = '+' + cleaned;
       } else if (cleaned.length === 10 && !cleaned.startsWith('1')) {
         cleaned = '+1' + cleaned;
       } else {
@@ -39,11 +43,11 @@ export class TwilioSmsAdapter implements SmsProvider {
     return await this.client.sendSMS(normalized, message);
   }
 
-  public async getStatus(_providerMessageId: string): Promise<any> {
-    return null;
+  public async getStatus(providerMessageId: string): Promise<any> {
+    return await this.client.getStatus(providerMessageId);
   }
 
   public async getBalance(): Promise<SmsBalanceResult | null> {
-    return null;
+    return await this.client.getBalance();
   }
 }

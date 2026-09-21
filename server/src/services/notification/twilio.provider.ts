@@ -13,10 +13,48 @@ export class TwilioSMSProvider implements SMSProvider {
   readonly name = 'Twilio SMS';
   constructor(private config?: TwilioConfig) {}
 
+  async getBalance(): Promise<{ balance: number; currency: string } | null> {
+    const ACCOUNT_SID = (this.config?.accountSid || CONFIG.TWILIO.ACCOUNT_SID || '').trim();
+    const AUTH_TOKEN = (this.config?.authToken || CONFIG.TWILIO.AUTH_TOKEN || '').trim();
+    if (!ACCOUNT_SID || !AUTH_TOKEN) return null;
+
+    try {
+      const authHeader = 'Basic ' + Buffer.from(`${ACCOUNT_SID}:${AUTH_TOKEN}`).toString('base64');
+      const response = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${ACCOUNT_SID}/Balance.json`, {
+        headers: { Authorization: authHeader }
+      });
+      if (!response.ok) return null;
+      const data = await response.json() as any;
+      return {
+        balance: parseFloat(data.balance || '0'),
+        currency: data.currency || 'USD'
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  async getStatus(providerMessageId: string): Promise<any> {
+    const ACCOUNT_SID = (this.config?.accountSid || CONFIG.TWILIO.ACCOUNT_SID || '').trim();
+    const AUTH_TOKEN = (this.config?.authToken || CONFIG.TWILIO.AUTH_TOKEN || '').trim();
+    if (!ACCOUNT_SID || !AUTH_TOKEN || !providerMessageId) return null;
+
+    try {
+      const authHeader = 'Basic ' + Buffer.from(`${ACCOUNT_SID}:${AUTH_TOKEN}`).toString('base64');
+      const response = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${ACCOUNT_SID}/Messages/${providerMessageId}.json`, {
+        headers: { Authorization: authHeader }
+      });
+      if (!response.ok) return null;
+      return await response.json();
+    } catch {
+      return null;
+    }
+  }
+
   async sendSMS(to: string, message: string): Promise<NotificationResult> {
-    const ACCOUNT_SID = this.config?.accountSid || CONFIG.TWILIO.ACCOUNT_SID;
-    const AUTH_TOKEN = this.config?.authToken || CONFIG.TWILIO.AUTH_TOKEN;
-    const PHONE_NUMBER = this.config?.phoneNumber || CONFIG.TWILIO.PHONE_NUMBER;
+    const ACCOUNT_SID = (this.config?.accountSid || CONFIG.TWILIO.ACCOUNT_SID || '').trim();
+    const AUTH_TOKEN = (this.config?.authToken || CONFIG.TWILIO.AUTH_TOKEN || '').trim();
+    const PHONE_NUMBER = (this.config?.phoneNumber || CONFIG.TWILIO.PHONE_NUMBER || '').trim();
 
     if (!ACCOUNT_SID || !AUTH_TOKEN || !PHONE_NUMBER) {
       return {
@@ -45,7 +83,12 @@ export class TwilioSMSProvider implements SMSProvider {
         body: params.toString()
       });
 
-      const data = await response.json() as any;
+      let data: any = {};
+      try {
+        data = await response.json();
+      } catch {
+        data = { message: `Twilio responded with HTTP ${response.status}` };
+      }
 
       if (!response.ok) {
         return {

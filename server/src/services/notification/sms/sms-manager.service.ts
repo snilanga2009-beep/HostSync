@@ -84,7 +84,7 @@ export class SmsManagerService {
     }
 
     // 2. If Twilio SMS is selected and has credentials, use live TwilioSmsAdapter
-    if (config.activeProvider === 'twilio' && config.twilioConfig.enabled && config.twilioConfig.accountSid && config.twilioConfig.authToken) {
+    if (config.activeProvider === 'twilio' && config.twilioConfig.accountSid && config.twilioConfig.authToken) {
       return new TwilioSmsAdapter(config.twilioConfig);
     }
 
@@ -97,7 +97,7 @@ export class SmsManagerService {
     if (config.activeProvider === 'srilanka' && config.slConfig.enabled) {
       return new SriLankaSmsProvider(config.slConfig);
     }
-    if (config.activeProvider === 'twilio' && config.twilioConfig.enabled) {
+    if (config.activeProvider === 'twilio' && (config.twilioConfig.enabled || config.activeProvider === 'twilio')) {
       return new TwilioSmsAdapter(config.twilioConfig);
     }
 
@@ -112,7 +112,7 @@ export class SmsManagerService {
     if (!config.fallbackEnabled) return null;
 
     if (config.activeProvider === 'srilanka') {
-      if (config.twilioConfig.enabled && config.twilioConfig.accountSid && config.twilioConfig.authToken) {
+      if ((config.twilioConfig.enabled || config.fallbackEnabled) && config.twilioConfig.accountSid && config.twilioConfig.authToken) {
         return new TwilioSmsAdapter(config.twilioConfig);
       }
     }

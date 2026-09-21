@@ -73,7 +73,18 @@ export const NotificationGatewaySettings: React.FC = () => {
   const [hasStoredTwilioAuth, setHasStoredTwilioAuth] = useState(false);
   const [showTwilioToken, setShowTwilioToken] = useState(false);
   const [verifyingTwilio, setVerifyingTwilio] = useState(false);
-  const [twilioVerifyResult, setTwilioVerifyResult] = useState<{ success: boolean; message: string } | null>(null);
+  const [twilioVerifyResult, setTwilioVerifyResult] = useState<{ success: boolean; message: string; balance?: number | null; currency?: string } | null>(null);
+  const [twilioBalance, setTwilioBalance] = useState<{ balance: number; currency: string } | null>(null);
+  const [checkingTwilioBalance, setCheckingTwilioBalance] = useState(false);
+  const [testTwilioPhone, setTestTwilioPhone] = useState('');
+  const [testTwilioMessage, setTestTwilioMessage] = useState('');
+  const [testingTwilioSend, setTestingTwilioSend] = useState(false);
+  const [testTwilioResult, setTestTwilioResult] = useState<{
+    success: boolean;
+    recipient: string;
+    steps?: { phoneValid: boolean; apiConnected: boolean; smsAccepted: boolean };
+    error?: string;
+  } | null>(null);
 
   // WhatsApp Provider Selection: 'direct_meta' | 'twilio' | 'simulator'
   const [whatsappProvider, setWhatsappProvider] = useState<'direct_meta' | 'twilio' | 'simulator'>('direct_meta');
@@ -284,8 +295,13 @@ export const NotificationGatewaySettings: React.FC = () => {
       });
       setTwilioVerifyResult({
         success: true,
-        message: `Connected successfully to "${res.friendlyName}" (Status: ${res.status}, Type: ${res.type})`
+        message: `Connected successfully to "${res.friendlyName}" (Status: ${res.status}, Type: ${res.type})`,
+        balance: res.balance,
+        currency: res.currency || 'USD'
       });
+      if (typeof res.balance === 'number') {
+        setTwilioBalance({ balance: res.balance, currency: res.currency || 'USD' });
+      }
     } catch (err: any) {
       setTwilioVerifyResult({
         success: false,
@@ -293,6 +309,54 @@ export const NotificationGatewaySettings: React.FC = () => {
       });
     } finally {
       setVerifyingTwilio(false);
+    }
+  };
+
+  const handleCheckTwilioBalance = async () => {
+    setCheckingTwilioBalance(true);
+    try {
+      const res = await api.get<any>('/settings/notifications/sms/balance?provider=twilio');
+      if (res.success && typeof res.balance === 'number') {
+        setTwilioBalance({ balance: res.balance, currency: res.currency || 'USD' });
+      } else {
+        alert(res.message || 'Unable to retrieve Twilio balance.');
+      }
+    } catch (err: any) {
+      alert(err.message || 'Failed to check Twilio balance.');
+    } finally {
+      setCheckingTwilioBalance(false);
+    }
+  };
+
+  const handleTestTwilioSms = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!testTwilioPhone) return;
+    setTestingTwilioSend(true);
+    setTestTwilioResult(null);
+    try {
+      const res = await api.post<any>('/settings/notifications/sms/test', {
+        provider: 'twilio',
+        phoneNumber: testTwilioPhone,
+        recipientPhone: testTwilioPhone,
+        fromNumber: twilioPhone,
+        message: testTwilioMessage || undefined,
+        accountSid: twilioAccountSid,
+        authToken: twilioAuthToken.startsWith('••••') ? '' : twilioAuthToken
+      });
+      setTestTwilioResult({
+        success: Boolean(res.success),
+        recipient: res.recipient || testTwilioPhone,
+        steps: res.steps,
+        error: res.error
+      });
+    } catch (err: any) {
+      setTestTwilioResult({
+        success: false,
+        recipient: testTwilioPhone,
+        error: err.message || 'Test Twilio SMS request failed.'
+      });
+    } finally {
+      setTestingTwilioSend(false);
     }
   };
 
@@ -572,7 +636,10 @@ export const NotificationGatewaySettings: React.FC = () => {
           {/* 3-Way Choice: Sri Lanka SMS / Twilio / Disabled */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div
-              onClick={() => setSmsProvider('srilanka')}
+              onClick={() => {
+                setSmsProvider('srilanka');
+                setSriLankaEnabled(true);
+              }}
               className={`p-4 rounded-xl border-2 cursor-pointer transition-all flex flex-col justify-between ${
                 smsProvider === 'srilanka'
                   ? 'border-amber-500 bg-amber-50/40 shadow-xs'
@@ -592,7 +659,10 @@ export const NotificationGatewaySettings: React.FC = () => {
             </div>
 
             <div
-              onClick={() => setSmsProvider('twilio')}
+              onClick={() => {
+                setSmsProvider('twilio');
+                setTwilioEnabled(true);
+              }}
               className={`p-4 rounded-xl border-2 cursor-pointer transition-all flex flex-col justify-between ${
                 smsProvider === 'twilio'
                   ? 'border-sky-500 bg-sky-50/40 shadow-xs'
@@ -1032,18 +1102,36 @@ export const NotificationGatewaySettings: React.FC = () => {
                   />
                   <span className="text-[10px] text-slate-400 mt-1 block">E.164 format with country code (e.g. +1...)</span>
                 </div>
+              </div>
 
-                <div className="flex items-end gap-2">
-                  <button
-                    type="button"
-                    onClick={handleVerifyTwilio}
-                    disabled={verifyingTwilio || !twilioAccountSid}
-                    className="w-full py-2.5 px-4 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl text-xs font-bold transition-colors flex items-center justify-center gap-1.5 disabled:opacity-50"
-                  >
-                    {verifyingTwilio ? <Loader2 className="w-4 h-4 animate-spin text-brand-600" /> : <ShieldCheck className="w-4 h-4 text-sky-600" />}
-                    Verify Twilio Credentials
-                  </button>
-                </div>
+              {/* Action buttons: Verify Connection & Check Balance */}
+              <div className="flex flex-col sm:flex-row items-center gap-3 pt-1">
+                <button
+                  type="button"
+                  onClick={handleVerifyTwilio}
+                  disabled={verifyingTwilio || !twilioAccountSid}
+                  className="w-full sm:w-auto py-2.5 px-4 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl text-xs font-bold transition-colors flex items-center justify-center gap-1.5 disabled:opacity-50"
+                >
+                  {verifyingTwilio ? <Loader2 className="w-4 h-4 animate-spin text-brand-600" /> : <ShieldCheck className="w-4 h-4 text-sky-600" />}
+                  Verify Twilio Credentials
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleCheckTwilioBalance}
+                  disabled={checkingTwilioBalance}
+                  className="w-full sm:w-auto py-2.5 px-4 bg-sky-50 hover:bg-sky-100 text-sky-900 border border-sky-200 rounded-xl text-xs font-bold transition-colors flex items-center justify-center gap-1.5 disabled:opacity-50"
+                >
+                  {checkingTwilioBalance ? <Loader2 className="w-4 h-4 animate-spin text-sky-600" /> : <Coins className="w-4 h-4 text-sky-600" />}
+                  Check Twilio Balance
+                </button>
+
+                {twilioBalance && (
+                  <span className="px-3 py-1.5 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-xl text-xs font-extrabold flex items-center gap-1.5">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                    Balance: {twilioBalance.currency} ${twilioBalance.balance.toFixed(2)}
+                  </span>
+                )}
               </div>
 
               {twilioVerifyResult && (
@@ -1054,6 +1142,79 @@ export const NotificationGatewaySettings: React.FC = () => {
                   <span>{twilioVerifyResult.message}</span>
                 </div>
               )}
+
+              {/* Dedicated Twilio Test SMS Console */}
+              <div className="p-4 bg-sky-50/50 border border-sky-200 rounded-xl space-y-3">
+                <div className="flex items-center gap-2">
+                  <Smartphone className="w-4 h-4 text-sky-700" />
+                  <h4 className="text-xs font-extrabold text-sky-950 uppercase tracking-wider">
+                    Twilio SMS Test & Diagnostics
+                  </h4>
+                </div>
+                <p className="text-[11px] text-sky-800">
+                  Dispatch an immediate test SMS via Twilio to your phone number (e.g. +94777183981 or +13055550199) to verify carrier delivery.
+                </p>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  <div className="sm:col-span-1">
+                    <input
+                      type="tel"
+                      placeholder="+947XXXXXXXX or +1XXXXXXXXXX"
+                      value={testTwilioPhone}
+                      onChange={(e) => setTestTwilioPhone(e.target.value.trim())}
+                      className="w-full text-xs font-mono p-2 border border-sky-300 rounded-xl bg-white focus:outline-none focus:ring-2 focus:ring-sky-500"
+                    />
+                  </div>
+                  <div className="sm:col-span-2 flex gap-2">
+                    <input
+                      type="text"
+                      placeholder="Optional test message (or leave blank for standard alert)"
+                      value={testTwilioMessage}
+                      onChange={(e) => setTestTwilioMessage(e.target.value)}
+                      className="flex-1 text-xs p-2 border border-sky-300 rounded-xl bg-white focus:outline-none focus:ring-2 focus:ring-sky-500"
+                    />
+                    <button
+                      type="button"
+                      onClick={handleTestTwilioSms}
+                      disabled={testingTwilioSend || !testTwilioPhone}
+                      className="py-2 px-4 bg-sky-600 hover:bg-sky-700 text-white rounded-xl text-xs font-bold transition-colors flex items-center gap-1.5 disabled:opacity-50 shrink-0"
+                    >
+                      {testingTwilioSend ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
+                      Send Twilio Test
+                    </button>
+                  </div>
+                </div>
+
+                {testTwilioResult && (
+                  <div className={`p-3 rounded-xl text-xs space-y-1.5 ${
+                    testTwilioResult.success ? 'bg-emerald-50 text-emerald-900 border border-emerald-200' : 'bg-rose-50 text-rose-900 border border-rose-200'
+                  }`}>
+                    <div className="flex items-center gap-2 font-bold">
+                      {testTwilioResult.success ? <CheckCircle2 className="w-4 h-4 text-emerald-600" /> : <XCircle className="w-4 h-4 text-rose-600" />}
+                      <span>{testTwilioResult.success ? 'Test SMS Accepted by Twilio!' : 'Twilio Test SMS Dispatch Failed'}</span>
+                      <span className="text-[10px] font-mono text-slate-500">({testTwilioResult.recipient})</span>
+                    </div>
+
+                    {testTwilioResult.steps && (
+                      <div className="flex flex-wrap gap-2 pt-1 text-[10px]">
+                        <span className={`px-2 py-0.5 rounded font-bold ${testTwilioResult.steps.phoneValid ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'}`}>
+                          {testTwilioResult.steps.phoneValid ? '✓ Phone Valid (E.164)' : '✗ Invalid E.164 Phone'}
+                        </span>
+                        <span className={`px-2 py-0.5 rounded font-bold ${testTwilioResult.steps.apiConnected ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'}`}>
+                          {testTwilioResult.steps.apiConnected ? '✓ Twilio Configured' : '✗ Twilio Not Configured'}
+                        </span>
+                        <span className={`px-2 py-0.5 rounded font-bold ${testTwilioResult.steps.smsAccepted ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'}`}>
+                          {testTwilioResult.steps.smsAccepted ? '✓ Twilio Queued/Sent' : '✗ Gateway Rejected'}
+                        </span>
+                      </div>
+                    )}
+
+                    {testTwilioResult.error && (
+                      <p className="text-[11px] text-rose-700 font-medium">{testTwilioResult.error}</p>
+                    )}
+                  </div>
+                )}
+              </div>
 
               {/* Twilio Status Callback Webhook */}
               <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-1.5">
