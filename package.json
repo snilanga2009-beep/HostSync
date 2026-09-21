@@ -1,0 +1,17 @@
+{
+  "name": "resortcare-platform",
+  "version": "1.0.0",
+  "description": "ResortCare - Smart Guest Service & Room Maintenance Platform",
+  "scripts": {
+    "dev": "concurrently \"npm run dev --prefix server\" \"npm run dev --prefix client\"",
+    "build:client": "npm run build --prefix client",
+    "build:server": "npm run build --prefix server",
+    "build": "npm run build:client && npm run build:server",
+    "seed": "npm run seed --prefix server",
+    "start": "npm run start --prefix server",
+    "verify": "npm run test --prefix server"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.4"
+  }
+}

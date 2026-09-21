@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: resortcare-hotel-qr
+    env: docker
+    plan: free
+    region: oregon
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: PORT
+        value: 5000
+      - key: JWT_SECRET
+        generateValue: true

@@ -1,0 +1,21 @@
+{
+  "short_name": "ResortCare",
+  "name": "ResortCare - Smart Guest Service & Room Maintenance",
+  "icons": [
+    {
+      "src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192' fill='%230284c7'><rect width='192' height='192' rx='36' fill='%230284c7'/><path d='M96 40L40 70l56 30 56-30-56-30zM40 125l56 30 56-30M40 98l56 30 56-30' stroke='white' stroke-width='10' stroke-linecap='round' stroke-linejoin='round' fill='none'/></svg>",
+      "type": "image/svg+xml",
+      "sizes": "192x192"
+    },
+    {
+      "src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512' fill='%230284c7'><rect width='512' height='512' rx='96' fill='%230284c7'/><path d='M256 100L100 180l156 80 156-80-156-80zM100 330l156 80 156-80M100 255l156 80 156-80' stroke='white' stroke-width='25' stroke-linecap='round' stroke-linejoin='round' fill='none'/></svg>",
+      "type": "image/svg+xml",
+      "sizes": "512x512"
+    }
+  ],
+  "start_url": "/",
+  "background_color": "#ffffff",
+  "theme_color": "#0284c7",
+  "display": "standalone",
+  "orientation": "portrait"
+}
