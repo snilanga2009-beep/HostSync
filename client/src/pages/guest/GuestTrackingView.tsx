@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../../services/api';
 import { StatusBadge } from '../../components/common/StatusBadge';
 import { PriorityBadge } from '../../components/common/PriorityBadge';
@@ -46,7 +46,19 @@ interface TrackingData {
     department: string;
     avatar_url?: string;
     rating?: number;
+    worked_in_room?: boolean | number;
+    service_reason?: string;
   };
+  allStaff?: Array<{
+    staff_id: string;
+    staff_name: string;
+    job_title: string;
+    department: string;
+    avatar_url?: string;
+    rating?: number;
+    worked_in_room?: boolean | number;
+    service_reason?: string;
+  }>;
   createdAt: string;
   resolvedAt?: string;
 }
@@ -63,6 +75,7 @@ const STEPS = [
 export const GuestTrackingView: React.FC = () => {
   const { token } = useParams<{ token: string }>();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
 
   const [data, setData] = useState<TrackingData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -74,6 +87,12 @@ export const GuestTrackingView: React.FC = () => {
   const [notifyChannel, setNotifyChannel] = useState<'whatsapp' | 'sms'>('whatsapp');
   const [notifySaved, setNotifySaved] = useState(false);
   const [savingConsent, setSavingConsent] = useState(false);
+
+  useEffect(() => {
+    if (searchParams.get('tip') || searchParams.get('tipStaffId')) {
+      setTipModalOpen(true);
+    }
+  }, [searchParams]);
 
   const handleSaveConsent = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -437,12 +456,17 @@ export const GuestTrackingView: React.FC = () => {
         roomId={data.roomId}
         requestId={data.requestId}
         roomNumber={data.roomNumber}
-        staffMembers={data.assignedStaff ? [data.assignedStaff] : [{
-          staff_id: 'staff-emp-101',
-          staff_name: 'Hotel Service Staff',
-          job_title: 'Specialist',
-          department: data.type === 'maintenance' ? 'Maintenance' : 'Guest Services'
-        }]}
+        staffMembers={
+          data.allStaff && data.allStaff.length > 0
+            ? data.allStaff
+            : (data.assignedStaff ? [data.assignedStaff] : [{
+                staff_id: 'staff-emp-101',
+                staff_name: 'Hotel Service Staff',
+                job_title: 'Specialist',
+                department: data.type === 'maintenance' ? 'Maintenance' : 'Guest Services'
+              }])
+        }
+        initialStaffId={searchParams.get('tipStaffId') || data.assignedStaff?.staff_id}
         currency="USD"
       />
     </div>

@@ -66,15 +66,42 @@ router.get('/room/:token', (req, res: Response) => {
       ORDER BY ri.category, ri.name ASC
     `).all(room.room_id) as any[];
 
-    // Fetch staff currently assigned to this room (for immediate tipping or contact)
+    // Fetch all active staff profiles, prioritizing staff members who recently worked in or were assigned to this room
     const staff = db.prepare(`
-      SELECT DISTINCT sp.id as staff_id, u.full_name as staff_name, sp.job_title,
-             sp.department, sp.avatar_url, sp.rating
+      SELECT 
+        sp.id as staff_id,
+        u.full_name as staff_name,
+        sp.job_title,
+        sp.department,
+        sp.avatar_url,
+        sp.rating,
+        CASE
+          WHEN rw.staff_id IS NOT NULL THEN 1
+          ELSE 0
+        END as worked_in_room,
+        rw.service_reason,
+        COALESCE(rw.last_work_time, '1970-01-01') as last_service_time
       FROM staff_profiles sp
       JOIN users u ON sp.user_id = u.id
-      WHERE sp.department IN ('Room Service', 'Maintenance', 'Housekeeping')
-      LIMIT 4
-    `).all();
+      LEFT JOIN (
+        SELECT staff_id, service_reason, MAX(work_time) as last_work_time FROM (
+          SELECT sa.staff_id, 'Assigned Technician' as service_reason, COALESCE(sa.completed_at, sa.assigned_at) as work_time
+          FROM staff_assignments sa
+          JOIN maintenance_requests mr ON sa.request_id = mr.id
+          WHERE mr.room_id = ?
+          UNION ALL
+          SELECT mr.completed_by_staff_id as staff_id, 'Completed Room Service' as service_reason, COALESCE(mr.resolved_at, mr.updated_at) as work_time
+          FROM maintenance_requests mr
+          WHERE mr.room_id = ? AND mr.completed_by_staff_id IS NOT NULL
+          UNION ALL
+          SELECT jt.staff_id, 'Dispatched Staff' as service_reason, jt.created_at as work_time
+          FROM job_tokens jt
+          WHERE jt.room_id = ?
+        ) GROUP BY staff_id
+      ) rw ON rw.staff_id = sp.id
+      WHERE (u.status = 'active' OR u.status IS NULL OR u.status != 'inactive')
+      ORDER BY worked_in_room DESC, last_service_time DESC, sp.rating DESC, u.full_name ASC
+    `).all(room.room_id, room.room_id, room.room_id) as any[];
 
     res.json({
       success: true,
@@ -369,6 +396,58 @@ router.get('/track/:token', (req, res: Response) => {
         `).get() as any;
       }
 
+      // Fetch all staff members, prioritizing the assigned/room technician at the very top
+      const allStaff = db.prepare(`
+        SELECT 
+          sp.id as staff_id,
+          u.full_name as staff_name,
+          sp.job_title,
+          sp.department,
+          sp.avatar_url,
+          sp.rating,
+          CASE
+            WHEN sp.id = ? THEN 1
+            WHEN rw.staff_id IS NOT NULL THEN 1
+            ELSE 0
+          END as worked_in_room,
+          CASE
+            WHEN sp.id = ? THEN 'Assigned Technician'
+            ELSE rw.service_reason
+          END as service_reason,
+          COALESCE(rw.last_work_time, '1970-01-01') as last_service_time
+        FROM staff_profiles sp
+        JOIN users u ON sp.user_id = u.id
+        LEFT JOIN (
+          SELECT staff_id, service_reason, MAX(work_time) as last_work_time FROM (
+            SELECT sa.staff_id, 'Assigned Technician' as service_reason, COALESCE(sa.completed_at, sa.assigned_at) as work_time
+            FROM staff_assignments sa
+            JOIN maintenance_requests mr ON sa.request_id = mr.id
+            WHERE mr.room_id = ?
+            UNION ALL
+            SELECT mr.completed_by_staff_id as staff_id, 'Completed Room Service' as service_reason, COALESCE(mr.resolved_at, mr.updated_at) as work_time
+            FROM maintenance_requests mr
+            WHERE mr.room_id = ? AND mr.completed_by_staff_id IS NOT NULL
+            UNION ALL
+            SELECT jt.staff_id, 'Dispatched Staff' as service_reason, jt.created_at as work_time
+            FROM job_tokens jt
+            WHERE jt.room_id = ?
+          ) GROUP BY staff_id
+        ) rw ON rw.staff_id = sp.id
+        WHERE (u.status = 'active' OR u.status IS NULL OR u.status != 'inactive')
+        ORDER BY worked_in_room DESC, last_service_time DESC, sp.rating DESC, u.full_name ASC
+      `).all(
+        assignedStaff?.staff_id || '',
+        assignedStaff?.staff_id || '',
+        maintReq.room_id,
+        maintReq.room_id,
+        maintReq.room_id
+      ) as any[];
+
+      if (assignedStaff) {
+        assignedStaff.worked_in_room = 1;
+        assignedStaff.service_reason = 'Assigned Technician';
+      }
+
       return res.json({
         type: 'maintenance',
         requestId: maintReq.id,
@@ -385,6 +464,7 @@ router.get('/track/:token', (req, res: Response) => {
         items,
         timeline,
         assignedStaff,
+        allStaff,
         createdAt: maintReq.created_at,
         resolvedAt: maintReq.resolved_at
       });
@@ -400,13 +480,64 @@ router.get('/track/:token', (req, res: Response) => {
     `).get(token) as any;
 
     if (serviceReq) {
-      const assignedStaff = db.prepare(`
+      let assignedStaff = db.prepare(`
         SELECT sp.id as staff_id, u.full_name as staff_name, sp.job_title, sp.department, sp.avatar_url, sp.rating
         FROM staff_profiles sp
         JOIN users u ON sp.user_id = u.id
         WHERE sp.department IN ('Room Service', 'Housekeeping')
         ORDER BY sp.rating DESC LIMIT 1
       `).get() as any;
+
+      const allStaff = db.prepare(`
+        SELECT 
+          sp.id as staff_id,
+          u.full_name as staff_name,
+          sp.job_title,
+          sp.department,
+          sp.avatar_url,
+          sp.rating,
+          CASE
+            WHEN sp.id = ? THEN 1
+            WHEN rw.staff_id IS NOT NULL THEN 1
+            ELSE 0
+          END as worked_in_room,
+          CASE
+            WHEN sp.id = ? THEN 'Assigned Staff'
+            ELSE rw.service_reason
+          END as service_reason,
+          COALESCE(rw.last_work_time, '1970-01-01') as last_service_time
+        FROM staff_profiles sp
+        JOIN users u ON sp.user_id = u.id
+        LEFT JOIN (
+          SELECT staff_id, service_reason, MAX(work_time) as last_work_time FROM (
+            SELECT sa.staff_id, 'Assigned Staff' as service_reason, COALESCE(sa.completed_at, sa.assigned_at) as work_time
+            FROM staff_assignments sa
+            JOIN maintenance_requests mr ON sa.request_id = mr.id
+            WHERE mr.room_id = ?
+            UNION ALL
+            SELECT mr.completed_by_staff_id as staff_id, 'Completed Room Service' as service_reason, COALESCE(mr.resolved_at, mr.updated_at) as work_time
+            FROM maintenance_requests mr
+            WHERE mr.room_id = ? AND mr.completed_by_staff_id IS NOT NULL
+            UNION ALL
+            SELECT jt.staff_id, 'Dispatched Staff' as service_reason, jt.created_at as work_time
+            FROM job_tokens jt
+            WHERE jt.room_id = ?
+          ) GROUP BY staff_id
+        ) rw ON rw.staff_id = sp.id
+        WHERE (u.status = 'active' OR u.status IS NULL OR u.status != 'inactive')
+        ORDER BY worked_in_room DESC, last_service_time DESC, sp.rating DESC, u.full_name ASC
+      `).all(
+        assignedStaff?.staff_id || '',
+        assignedStaff?.staff_id || '',
+        serviceReq.room_id,
+        serviceReq.room_id,
+        serviceReq.room_id
+      ) as any[];
+
+      if (assignedStaff) {
+        assignedStaff.worked_in_room = 1;
+        assignedStaff.service_reason = 'Assigned Staff';
+      }
 
       return res.json({
         type: 'service',
@@ -422,6 +553,7 @@ router.get('/track/:token', (req, res: Response) => {
         quantity: serviceReq.quantity,
         notes: serviceReq.notes,
         assignedStaff,
+        allStaff,
         createdAt: serviceReq.created_at
       });
     }

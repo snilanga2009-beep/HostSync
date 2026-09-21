@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../../services/api';
 import { useLanguage } from '../../context/LanguageContext';
 import {
@@ -54,12 +54,15 @@ interface GuestRoomData {
     department: string;
     avatar_url?: string;
     rating?: number;
+    worked_in_room?: boolean | number;
+    service_reason?: string;
   }>;
 }
 
 export const GuestRoomHome: React.FC = () => {
   const { token } = useParams<{ token: string }>();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { t, language, setLanguage } = useLanguage();
 
   const [data, setData] = useState<GuestRoomData | null>(null);
@@ -71,6 +74,14 @@ export const GuestRoomHome: React.FC = () => {
   const [serviceOpen, setServiceOpen] = useState(false);
   const [tipOpen, setTipOpen] = useState(false);
   const [contactOpen, setContactOpen] = useState(false);
+
+  const initialTipStaffId = searchParams.get('tipStaffId') || undefined;
+
+  useEffect(() => {
+    if (initialTipStaffId) {
+      setTipOpen(true);
+    }
+  }, [initialTipStaffId]);
 
   useEffect(() => {
     if (!token) return;
@@ -352,6 +363,7 @@ export const GuestRoomHome: React.FC = () => {
         roomNumber={data.room.number}
         staffMembers={data.serviceStaff}
         currency={data.hotel.currency}
+        initialStaffId={initialTipStaffId}
       />
 
       {/* Contact Modal */}

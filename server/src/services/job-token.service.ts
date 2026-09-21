@@ -226,7 +226,7 @@ export class JobTokenService {
     // Load maintenance request details
     let job = db.prepare(`
       SELECT mr.*,
-             r.room_number, r.name as room_name,
+             r.room_number, r.name as room_name, r.qr_token as room_qr_token,
              b.name as building_name, f.name as floor_name,
              h.name as hotel_name, h.logo_url as hotel_logo, h.phone as hotel_phone,
              sa.id as assignment_id, sa.status as assignment_status, sa.assigned_at,
@@ -249,7 +249,7 @@ export class JobTokenService {
                gsr.service_type as priority,
                gsr.service_type as job_type,
                gsr.special_instructions as description,
-               r.room_number, r.name as room_name,
+               r.room_number, r.name as room_name, r.qr_token as room_qr_token,
                b.name as building_name, f.name as floor_name,
                h.name as hotel_name, h.logo_url as hotel_logo, h.phone as hotel_phone,
                sa.id as assignment_id, sa.status as assignment_status, sa.assigned_at,

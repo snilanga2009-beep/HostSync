@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useParams } from 'react-router-dom';
+import QRCode from 'qrcode';
 import {
   Wrench,
   AlertTriangle,
@@ -19,15 +20,22 @@ import {
   Phone,
   ShieldAlert,
   Layers,
-  ArrowRight
+  ArrowRight,
+  HeartHandshake,
+  ExternalLink,
+  QrCode
 } from 'lucide-react';
 import { api } from '../../services/api';
+import { GuestTipModal } from '../guest/GuestTipModal';
 
 interface JobDetails {
   id: string;
   requestCode: string;
   roomNumber: string;
   roomName?: string;
+  roomId?: string;
+  roomToken?: string;
+  trackingToken?: string;
   buildingName?: string;
   floorName?: string;
   priority: string;
@@ -72,12 +80,54 @@ export const StaffJobMobilePage: React.FC = () => {
   const [completedSuccess, setCompletedSuccess] = useState(false);
   const [completedTime, setCompletedTime] = useState('');
 
+  // Tipping and Gratuity State
+  const [tipModalOpen, setTipModalOpen] = useState(false);
+  const [tipQrUrl, setTipQrUrl] = useState<string>('');
+  const [copiedTipLink, setCopiedTipLink] = useState(false);
+
   // Canvas Signature State
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [isDrawing, setIsDrawing] = useState(false);
   const [hasSignature, setHasSignature] = useState(false);
 
   const cleanToken = (token || '').trim().replace(/[.,;:/?#]+$/, '');
+
+  // Generate crisp QR code whenever job or staff is loaded
+  useEffect(() => {
+    if (!staff || !job) return;
+    const origin = window.location.origin;
+    let destUrl = '';
+    if (job.roomToken) {
+      destUrl = `${origin}/guest/r/${job.roomToken}?tipStaffId=${staff.id}&requestId=${job.id || ''}`;
+    } else if (job.trackingToken) {
+      destUrl = `${origin}/guest/track/${job.trackingToken}?tip=1&tipStaffId=${staff.id}`;
+    } else {
+      destUrl = `${origin}/guest/r/${cleanToken}?tipStaffId=${staff.id}`;
+    }
+
+    QRCode.toDataURL(destUrl, {
+      width: 260,
+      margin: 1,
+      color: { dark: '#0f172a', light: '#ffffff' }
+    })
+      .then((url) => setTipQrUrl(url))
+      .catch((err) => console.error('Error generating tip QR:', err));
+  }, [job, staff, cleanToken]);
+
+  const handleCopyTipLink = () => {
+    if (!staff || !job) return;
+    const origin = window.location.origin;
+    const destUrl = job.roomToken
+      ? `${origin}/guest/r/${job.roomToken}?tipStaffId=${staff.id}&requestId=${job.id || ''}`
+      : (job.trackingToken
+          ? `${origin}/guest/track/${job.trackingToken}?tip=1&tipStaffId=${staff.id}`
+          : `${origin}/guest/r/${cleanToken}?tipStaffId=${staff.id}`);
+
+    navigator.clipboard.writeText(destUrl).then(() => {
+      setCopiedTipLink(true);
+      setTimeout(() => setCopiedTipLink(false), 2500);
+    });
+  };
 
   const loadJob = async () => {
     if (!cleanToken) return;
@@ -426,6 +476,62 @@ export const StaffJobMobilePage: React.FC = () => {
           </div>
         )}
 
+        {/* ================= GUEST GRATUITY & TIP QR CARD ================= */}
+        {(completedSuccess || job.status === 'Completed') && (
+          <div className="bg-slate-900 border-2 border-rose-500/50 rounded-3xl p-5 shadow-2xl space-y-4 animate-fadeIn">
+            <div className="flex items-center gap-3 pb-3 border-b border-slate-800">
+              <div className="w-10 h-10 rounded-2xl bg-rose-500/20 border border-rose-500/40 flex items-center justify-center text-rose-400 shrink-0">
+                <HeartHandshake className="w-5 h-5" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <h4 className="text-sm font-black text-white">Receive Guest Tip / Gratuity</h4>
+                <p className="text-[11px] text-slate-400">Direct tip collection for {staff?.fullName || 'Technician'}</p>
+              </div>
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-rose-500/20 text-rose-300 border border-rose-500/30 shrink-0">
+                Ready
+              </span>
+            </div>
+
+            {/* QR Code Container */}
+            <div className="bg-white p-4 rounded-2xl flex flex-col items-center justify-center shadow-inner text-center">
+              {tipQrUrl ? (
+                <img src={tipQrUrl} alt="Tip QR Code" className="w-44 h-44 object-contain rounded-lg" />
+              ) : (
+                <div className="w-44 h-44 flex items-center justify-center text-slate-400">
+                  <Loader2 className="w-6 h-6 animate-spin" />
+                </div>
+              )}
+              <p className="text-xs font-black text-slate-900 mt-2.5">
+                Scan with Smartphone to Tip {staff?.fullName}
+              </p>
+              <p className="text-[10px] text-slate-500">
+                Room {job.roomNumber} • Card, Apple Pay, Google Pay
+              </p>
+            </div>
+
+            {/* Action buttons */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => setTipModalOpen(true)}
+                className="w-full py-3.5 bg-rose-600 hover:bg-rose-500 active:scale-95 text-white rounded-xl text-xs font-black transition-all flex items-center justify-center gap-2 shadow-lg shadow-rose-900/40"
+              >
+                <DollarSign className="w-4 h-4" />
+                Guest Tips on this Phone
+              </button>
+
+              <button
+                type="button"
+                onClick={handleCopyTipLink}
+                className="w-full py-3.5 bg-slate-800 hover:bg-slate-700 active:scale-95 text-slate-200 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 border border-slate-700"
+              >
+                {copiedTipLink ? <Check className="w-4 h-4 text-emerald-400" /> : <ExternalLink className="w-4 h-4" />}
+                {copiedTipLink ? 'Tip Link Copied!' : 'Copy Direct Tip Link'}
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* ================= COMPLETE JOB FORM ================= */}
         {showCompleteForm && (
           <form onSubmit={handleCompleteJob} className="bg-slate-900 border-2 border-brand-500/60 rounded-3xl p-5 shadow-2xl space-y-4">
@@ -675,11 +781,44 @@ export const StaffJobMobilePage: React.FC = () => {
 
           {/* If already Completed */}
           {job.status === 'Completed' && (
-            <div className="p-3 text-center text-xs font-black text-emerald-400 bg-emerald-950/60 rounded-xl border border-emerald-500/30">
-              ✓ THIS JOB IS COMPLETED
+            <div className="space-y-2.5">
+              <div className="p-3 text-center text-xs font-black text-emerald-400 bg-emerald-950/60 rounded-xl border border-emerald-500/30">
+                ✓ THIS JOB IS COMPLETED
+              </div>
+              <button
+                type="button"
+                onClick={() => setTipModalOpen(true)}
+                className="w-full py-4 bg-rose-600 hover:bg-rose-500 active:scale-95 text-white rounded-2xl text-sm font-black shadow-lg shadow-rose-900/40 transition-all flex items-center justify-center gap-2"
+              >
+                <HeartHandshake className="w-5 h-5" />
+                Collect Tip / Open Tipping Screen
+              </button>
             </div>
           )}
         </div>
+      )}
+
+      {/* Guest Tip Modal on Staff Device */}
+      {job && staff && (
+        <GuestTipModal
+          isOpen={tipModalOpen}
+          onClose={() => setTipModalOpen(false)}
+          roomToken={job.roomToken}
+          roomId={job.roomId}
+          requestId={job.id}
+          roomNumber={job.roomNumber}
+          staffMembers={[{
+            staff_id: staff.id,
+            staff_name: staff.fullName,
+            job_title: staff.jobTitle,
+            department: staff.department,
+            avatar_url: staff.avatarUrl,
+            worked_in_room: true,
+            service_reason: 'Completed Room Maintenance'
+          }]}
+          initialStaffId={staff.id}
+          currency="USD"
+        />
       )}
     </div>
   );
