@@ -29,8 +29,11 @@ export const CONFIG = {
   SRI_LANKA_SMS: {
     ENABLED: process.env.SRI_LANKA_SMS_ENABLED === 'true',
     PROVIDER: process.env.SRI_LANKA_SMS_PROVIDER || 'textlk',
-    API_TOKEN: process.env.SRI_LANKA_SMS_API_TOKEN || '',
+    USER_ID: process.env.SRI_LANKA_SMS_USER_ID || '',
+    API_KEY: process.env.SRI_LANKA_SMS_API_KEY || process.env.SRI_LANKA_SMS_API_TOKEN || '',
+    API_TOKEN: process.env.SRI_LANKA_SMS_API_TOKEN || process.env.SRI_LANKA_SMS_API_KEY || '',
     SENDER_ID: process.env.SRI_LANKA_SMS_SENDER_ID || 'HOTELNAME',
+    API_BASE_URL: process.env.SRI_LANKA_SMS_API_BASE_URL || 'https://app.text.lk/api/v3',
     API_URL: process.env.SRI_LANKA_SMS_API_URL || 'https://app.text.lk/api/v3/sms/send',
     FALLBACK_ENABLED: process.env.SMS_FALLBACK_ENABLED === 'true'
   },

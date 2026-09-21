@@ -39,14 +39,15 @@ export const NotificationGatewaySettings: React.FC = () => {
   const [smsProvider, setSmsProvider] = useState<'srilanka' | 'twilio' | 'disabled'>('srilanka');
   const [smsFallbackEnabled, setSmsFallbackEnabled] = useState(true);
 
-  // Sri Lanka SMS (Text.lk)
+  // Sri Lanka SMS (Text.lk) API Information
   const [sriLankaEnabled, setSriLankaEnabled] = useState(true);
   const [sriLankaProvider, setSriLankaProvider] = useState('textlk');
-  const [sriLankaApiToken, setSriLankaApiToken] = useState('');
+  const [sriLankaUserId, setSriLankaUserId] = useState('');
+  const [sriLankaApiKey, setSriLankaApiKey] = useState('');
+  const [sriLankaApiBaseUrl, setSriLankaApiBaseUrl] = useState('https://app.text.lk/api/v3');
   const [sriLankaSenderId, setSriLankaSenderId] = useState('HOTELNAME');
-  const [sriLankaApiUrl, setSriLankaApiUrl] = useState('https://app.text.lk/api/v3/sms/send');
-  const [hasStoredSriLankaToken, setHasStoredSriLankaToken] = useState(false);
-  const [showSriLankaToken, setShowSriLankaToken] = useState(false);
+  const [hasStoredSriLankaKey, setHasStoredSriLankaKey] = useState(false);
+  const [showSriLankaKey, setShowSriLankaKey] = useState(false);
   const [verifyingSriLanka, setVerifyingSriLanka] = useState(false);
   const [sriLankaVerifyResult, setSriLankaVerifyResult] = useState<{ success: boolean; message: string; balance?: number | null; currency?: string } | null>(null);
   const [sriLankaBalance, setSriLankaBalance] = useState<{ balance: number; currency: string } | null>(null);
@@ -124,11 +125,13 @@ export const NotificationGatewaySettings: React.FC = () => {
       if (res.sriLankaSms) {
         setSriLankaEnabled(Boolean(res.sriLankaSms.enabled));
         setSriLankaProvider(res.sriLankaSms.provider || 'textlk');
+        setSriLankaUserId(res.sriLankaSms.userId || '');
         setSriLankaSenderId(res.sriLankaSms.senderId || 'HOTELNAME');
-        setSriLankaApiUrl(res.sriLankaSms.apiUrl || 'https://app.text.lk/api/v3/sms/send');
-        setHasStoredSriLankaToken(Boolean(res.sriLankaSms.hasApiToken));
-        if (res.sriLankaSms.hasApiToken) {
-          setSriLankaApiToken('••••••••••••');
+        setSriLankaApiBaseUrl(res.sriLankaSms.apiBaseUrl || res.sriLankaSms.apiUrl || 'https://app.text.lk/api/v3');
+        const hasKey = Boolean(res.sriLankaSms.hasApiKey || res.sriLankaSms.hasApiToken);
+        setHasStoredSriLankaKey(hasKey);
+        if (hasKey) {
+          setSriLankaApiKey('••••••••••••');
         }
       }
 
@@ -195,8 +198,9 @@ export const NotificationGatewaySettings: React.FC = () => {
     setSriLankaVerifyResult(null);
     try {
       const res = await api.post<any>('/settings/notifications/verify-srilanka-sms', {
-        apiToken: sriLankaApiToken.startsWith('••••') ? '' : sriLankaApiToken,
-        apiUrl: sriLankaApiUrl,
+        userId: sriLankaUserId,
+        apiKey: sriLankaApiKey.startsWith('••••') ? '' : sriLankaApiKey,
+        apiBaseUrl: sriLankaApiBaseUrl,
         senderId: sriLankaSenderId
       });
       setSriLankaVerifyResult({
@@ -211,7 +215,7 @@ export const NotificationGatewaySettings: React.FC = () => {
     } catch (err: any) {
       setSriLankaVerifyResult({
         success: false,
-        message: err.message || 'Sri Lanka SMS verification failed. Please check API Token and URL.'
+        message: err.message || 'Sri Lanka SMS verification failed. Please check User ID, API Key, and Base URL.'
       });
     } finally {
       setVerifyingSriLanka(false);
@@ -350,9 +354,12 @@ export const NotificationGatewaySettings: React.FC = () => {
         sriLankaSms: {
           enabled: sriLankaEnabled,
           provider: sriLankaProvider,
-          apiToken: sriLankaApiToken.startsWith('••••') ? '' : sriLankaApiToken,
+          userId: sriLankaUserId,
+          apiKey: sriLankaApiKey.startsWith('••••') ? '' : sriLankaApiKey,
+          apiToken: sriLankaApiKey.startsWith('••••') ? '' : sriLankaApiKey,
           senderId: sriLankaSenderId,
-          apiUrl: sriLankaApiUrl
+          apiBaseUrl: sriLankaApiBaseUrl,
+          apiUrl: sriLankaApiBaseUrl
         },
         twilioSms: {
           enabled: twilioEnabled,
@@ -575,64 +582,99 @@ export const NotificationGatewaySettings: React.FC = () => {
                 </label>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
-                      Text.lk API Token *
+              {/* ================= API INFORMATION ================= */}
+              <div className="p-4 bg-slate-50/80 border border-slate-200 rounded-xl space-y-4">
+                <div className="flex items-center justify-between pb-2 border-b border-slate-200/60">
+                  <div className="flex items-center gap-2">
+                    <Sliders className="w-4 h-4 text-brand-600" />
+                    <h4 className="text-xs font-bold text-slate-900 uppercase tracking-wider">
+                      API Information
+                    </h4>
+                  </div>
+                  <span className="text-[10px] font-bold text-slate-500 bg-white px-2 py-0.5 rounded border border-slate-200">
+                    User ID, API Key & Base URL
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  {/* User ID */}
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                      User ID
                     </label>
-                    {hasStoredSriLankaToken && (
-                      <span className="text-[10px] text-emerald-700 font-bold bg-emerald-50 px-1.5 py-0.2 rounded">
-                        Secret Stored
-                      </span>
-                    )}
-                  </div>
-                  <div className="relative">
                     <input
-                      type={showSriLankaToken ? 'text' : 'password'}
-                      placeholder="Enter Text.lk Bearer API Token"
-                      value={sriLankaApiToken}
-                      onChange={(e) => setSriLankaApiToken(e.target.value.trim())}
-                      className="w-full text-xs font-mono p-2.5 pr-10 border border-slate-200 rounded-xl focus:ring-2 focus:ring-brand-500 focus:outline-none"
+                      type="text"
+                      placeholder="e.g. USER-10824 or Account ID"
+                      value={sriLankaUserId}
+                      onChange={(e) => setSriLankaUserId(e.target.value.trim())}
+                      className="w-full text-xs font-mono p-2.5 border border-slate-200 rounded-xl bg-white focus:ring-2 focus:ring-brand-500 focus:outline-none"
                     />
-                    <button
-                      type="button"
-                      onClick={() => setShowSriLankaToken(!showSriLankaToken)}
-                      className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-600"
-                    >
-                      {showSriLankaToken ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                    </button>
+                    <span className="text-[10px] text-slate-400 mt-1 block">Your SMS provider account or user identifier</span>
                   </div>
-                  <span className="text-[10px] text-slate-400 mt-1 block">From app.text.lk &rarr; API & Integrations &rarr; API Tokens</span>
+
+                  {/* API Key */}
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
+                        API Key *
+                      </label>
+                      {hasStoredSriLankaKey && (
+                        <span className="text-[10px] text-emerald-700 font-bold bg-emerald-50 px-1.5 py-0.2 rounded">
+                          Secret Stored
+                        </span>
+                      )}
+                    </div>
+                    <div className="relative">
+                      <input
+                        type={showSriLankaKey ? 'text' : 'password'}
+                        placeholder="Enter Bearer API Key / Token"
+                        value={sriLankaApiKey}
+                        onChange={(e) => setSriLankaApiKey(e.target.value.trim())}
+                        className="w-full text-xs font-mono p-2.5 pr-10 border border-slate-200 rounded-xl bg-white focus:ring-2 focus:ring-brand-500 focus:outline-none"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowSriLankaKey(!showSriLankaKey)}
+                        className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-600"
+                      >
+                        {showSriLankaKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
+                    </div>
+                    <span className="text-[10px] text-slate-400 mt-1 block">From app.text.lk &rarr; API & Integrations &rarr; API Tokens</span>
+                  </div>
                 </div>
 
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                    TRCSL Sender ID (Mask) *
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="HOTELNAME"
-                    value={sriLankaSenderId}
-                    onChange={(e) => setSriLankaSenderId(e.target.value.trim().toUpperCase())}
-                    className="w-full text-xs font-mono p-2.5 border border-slate-200 rounded-xl focus:ring-2 focus:ring-brand-500 focus:outline-none"
-                  />
-                  <span className="text-[10px] text-slate-400 mt-1 block">Your TRCSL approved Sender Mask (max 11 chars alphanumeric)</span>
-                </div>
-              </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  {/* API Base URL */}
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                      API Base URL *
+                    </label>
+                    <input
+                      type="url"
+                      placeholder="https://app.text.lk/api/v3"
+                      value={sriLankaApiBaseUrl}
+                      onChange={(e) => setSriLankaApiBaseUrl(e.target.value.trim())}
+                      className="w-full text-xs font-mono p-2.5 border border-slate-200 rounded-xl bg-white focus:ring-2 focus:ring-brand-500 focus:outline-none"
+                    />
+                    <span className="text-[10px] text-slate-400 mt-1 block">Default: https://app.text.lk/api/v3</span>
+                  </div>
 
-              <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                  API Endpoint URL
-                </label>
-                <input
-                  type="url"
-                  placeholder="https://app.text.lk/api/v3/sms/send"
-                  value={sriLankaApiUrl}
-                  onChange={(e) => setSriLankaApiUrl(e.target.value.trim())}
-                  className="w-full text-xs font-mono p-2.5 border border-slate-200 rounded-xl focus:ring-2 focus:ring-brand-500 focus:outline-none"
-                />
-                <span className="text-[10px] text-slate-400 mt-1 block">Default: https://app.text.lk/api/v3/sms/send</span>
+                  {/* TRCSL Sender ID */}
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                      TRCSL Sender ID (Mask) *
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="HOTELNAME"
+                      value={sriLankaSenderId}
+                      onChange={(e) => setSriLankaSenderId(e.target.value.trim().toUpperCase())}
+                      className="w-full text-xs font-mono p-2.5 border border-slate-200 rounded-xl bg-white focus:ring-2 focus:ring-brand-500 focus:outline-none"
+                    />
+                    <span className="text-[10px] text-slate-400 mt-1 block">Your TRCSL approved Sender Mask (max 11 chars alphanumeric)</span>
+                  </div>
+                </div>
               </div>
 
               {/* Action buttons: Verify Connection & Check Balance */}
@@ -640,7 +682,7 @@ export const NotificationGatewaySettings: React.FC = () => {
                 <button
                   type="button"
                   onClick={handleVerifySriLanka}
-                  disabled={verifyingSriLanka || (!sriLankaApiToken && !hasStoredSriLankaToken)}
+                  disabled={verifyingSriLanka || (!sriLankaApiKey && !hasStoredSriLankaKey)}
                   className="w-full sm:w-auto py-2.5 px-4 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl text-xs font-bold transition-colors flex items-center justify-center gap-1.5 disabled:opacity-50"
                 >
                   {verifyingSriLanka ? <Loader2 className="w-4 h-4 animate-spin text-brand-600" /> : <ShieldCheck className="w-4 h-4 text-emerald-600" />}

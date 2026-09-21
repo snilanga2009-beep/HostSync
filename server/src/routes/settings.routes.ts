@@ -32,8 +32,10 @@ router.get('/notifications/providers', authenticateToken, (req: AuthRequest, res
 
     const slEnabled = stored.sriLankaSms?.enabled !== undefined ? stored.sriLankaSms.enabled : CONFIG.SRI_LANKA_SMS.ENABLED;
     const slProvider = stored.sriLankaSms?.provider || CONFIG.SRI_LANKA_SMS.PROVIDER || 'textlk';
-    const slToken = stored.sriLankaSms?.apiToken || CONFIG.SRI_LANKA_SMS.API_TOKEN || '';
+    const slUserId = stored.sriLankaSms?.userId || CONFIG.SRI_LANKA_SMS.USER_ID || '';
+    const slToken = stored.sriLankaSms?.apiKey || stored.sriLankaSms?.apiToken || CONFIG.SRI_LANKA_SMS.API_KEY || CONFIG.SRI_LANKA_SMS.API_TOKEN || '';
     const slSender = stored.sriLankaSms?.senderId || CONFIG.SRI_LANKA_SMS.SENDER_ID || 'HOTELNAME';
+    const slBaseUrl = stored.sriLankaSms?.apiBaseUrl || stored.sriLankaSms?.apiUrl || CONFIG.SRI_LANKA_SMS.API_BASE_URL || 'https://app.text.lk/api/v3';
     const slUrl = stored.sriLankaSms?.apiUrl || CONFIG.SRI_LANKA_SMS.API_URL || 'https://app.text.lk/api/v3/sms/send';
 
     const twilioSid = stored.twilioSms?.accountSid || CONFIG.TWILIO.ACCOUNT_SID || '';
@@ -63,8 +65,14 @@ router.get('/notifications/providers', authenticateToken, (req: AuthRequest, res
       sriLankaSms: {
         enabled: Boolean(slEnabled),
         provider: slProvider,
+        userId: slUserId,
+        apiKey: slToken,
+        apiToken: slToken,
         senderId: slSender,
+        apiBaseUrl: slBaseUrl,
         apiUrl: slUrl,
+        hasApiKey: Boolean(slToken),
+        maskedApiKey: maskSecret(slToken),
         hasApiToken: Boolean(slToken),
         maskedApiToken: maskSecret(slToken)
       },
@@ -123,9 +131,9 @@ router.put('/notifications/providers', authenticateToken, requireRole(['Hotel Ad
     const payload = req.body;
 
     // Preserve existing secret tokens if masked or not provided
-    let newSlToken = payload.sriLankaSms?.apiToken;
+    let newSlToken = payload.sriLankaSms?.apiKey || payload.sriLankaSms?.apiToken;
     if (!newSlToken || newSlToken.startsWith('••••') || newSlToken.trim() === '') {
-      newSlToken = existing.sriLankaSms?.apiToken || CONFIG.SRI_LANKA_SMS.API_TOKEN || '';
+      newSlToken = existing.sriLankaSms?.apiKey || existing.sriLankaSms?.apiToken || CONFIG.SRI_LANKA_SMS.API_KEY || CONFIG.SRI_LANKA_SMS.API_TOKEN || '';
     }
 
     let newTwilioAuth = payload.twilioSms?.authToken;
@@ -145,9 +153,12 @@ router.put('/notifications/providers', authenticateToken, requireRole(['Hotel Ad
       sriLankaSms: {
         enabled: payload.sriLankaSms?.enabled !== undefined ? Boolean(payload.sriLankaSms.enabled) : true,
         provider: payload.sriLankaSms?.provider || 'textlk',
+        userId: (payload.sriLankaSms?.userId || '').trim(),
+        apiKey: newSlToken,
         apiToken: newSlToken,
         senderId: (payload.sriLankaSms?.senderId || 'HOTELNAME').trim(),
-        apiUrl: (payload.sriLankaSms?.apiUrl || 'https://app.text.lk/api/v3/sms/send').trim()
+        apiBaseUrl: (payload.sriLankaSms?.apiBaseUrl || payload.sriLankaSms?.apiUrl || 'https://app.text.lk/api/v3').trim(),
+        apiUrl: (payload.sriLankaSms?.apiUrl || payload.sriLankaSms?.apiBaseUrl || 'https://app.text.lk/api/v3/sms/send').trim()
       },
       twilioSms: {
         enabled: Boolean(payload.twilioSms?.enabled),
@@ -252,24 +263,27 @@ router.post('/notifications/verify-twilio', authenticateToken, requireRole(['Hot
 // POST /api/settings/notifications/verify-srilanka-sms - Live Sri Lanka SMS API verification & Balance Check
 router.post('/notifications/verify-srilanka-sms', authenticateToken, requireRole(['Hotel Admin', 'Super Admin']), async (req: AuthRequest, res: Response) => {
   try {
-    let { apiToken, apiUrl } = req.body;
-    if (!apiToken || apiToken.startsWith('••••')) {
+    let { userId, apiKey, apiToken, apiBaseUrl, apiUrl, senderId } = req.body;
+    let token = apiKey || apiToken;
+
+    if (!token || token.startsWith('••••')) {
       const hotel = db.prepare(`SELECT id FROM hotels LIMIT 1`).get() as any;
       const row = db.prepare(`SELECT value_json FROM settings WHERE hotel_id = ? AND category = 'notifications' AND key = 'providers'`).get(hotel?.id) as any;
       if (row?.value_json) {
         try {
           const p = JSON.parse(row.value_json);
-          apiToken = p.sriLankaSms?.apiToken || CONFIG.SRI_LANKA_SMS.API_TOKEN;
+          token = p.sriLankaSms?.apiKey || p.sriLankaSms?.apiToken || CONFIG.SRI_LANKA_SMS.API_KEY || CONFIG.SRI_LANKA_SMS.API_TOKEN;
+          if (!userId) userId = p.sriLankaSms?.userId;
         } catch (e) {}
       }
     }
 
-    if (!apiToken) {
-      return res.status(400).json({ success: false, error: 'Sri Lanka SMS API Token is required for verification.' });
+    if (!token) {
+      return res.status(400).json({ success: false, error: 'API Key (or Bearer Token) is required for verification.' });
     }
 
     const { SriLankaSmsProvider } = await import('../services/notification/sms/srilanka.provider');
-    const provider = new SriLankaSmsProvider({ apiToken, apiUrl });
+    const provider = new SriLankaSmsProvider({ userId, apiKey: token, apiToken: token, apiBaseUrl, apiUrl, senderId });
     const balanceInfo = await provider.getBalance();
 
     res.json({

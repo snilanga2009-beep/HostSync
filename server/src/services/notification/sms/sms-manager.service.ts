@@ -39,8 +39,11 @@ export class SmsManagerService {
     const slConfig = {
       enabled: stored.sriLankaSms?.enabled !== undefined ? stored.sriLankaSms.enabled : CONFIG.SRI_LANKA_SMS.ENABLED,
       provider: stored.sriLankaSms?.provider || CONFIG.SRI_LANKA_SMS.PROVIDER || 'textlk',
-      apiToken: stored.sriLankaSms?.apiToken || CONFIG.SRI_LANKA_SMS.API_TOKEN || '',
+      userId: stored.sriLankaSms?.userId || CONFIG.SRI_LANKA_SMS.USER_ID || '',
+      apiKey: stored.sriLankaSms?.apiKey || stored.sriLankaSms?.apiToken || CONFIG.SRI_LANKA_SMS.API_KEY || '',
+      apiToken: stored.sriLankaSms?.apiKey || stored.sriLankaSms?.apiToken || CONFIG.SRI_LANKA_SMS.API_TOKEN || '',
       senderId: stored.sriLankaSms?.senderId || CONFIG.SRI_LANKA_SMS.SENDER_ID || 'HOTELNAME',
+      apiBaseUrl: stored.sriLankaSms?.apiBaseUrl || stored.sriLankaSms?.apiUrl || CONFIG.SRI_LANKA_SMS.API_BASE_URL || 'https://app.text.lk/api/v3',
       apiUrl: stored.sriLankaSms?.apiUrl || CONFIG.SRI_LANKA_SMS.API_URL || 'https://app.text.lk/api/v3/sms/send'
     };
 

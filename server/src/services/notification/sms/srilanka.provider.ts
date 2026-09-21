@@ -3,8 +3,11 @@ import { NotificationResult } from '../notification.interface';
 
 export interface SriLankaSmsConfig {
   provider?: string; // 'textlk' | 'dialog' | 'mobitel'
-  apiToken: string;
+  userId?: string;
+  apiKey?: string;
+  apiToken?: string;
   senderId?: string;
+  apiBaseUrl?: string;
   apiUrl?: string;
 }
 
@@ -16,14 +19,24 @@ export class SriLankaSmsProvider implements SmsProvider {
   readonly key: string = 'textlk';
   readonly name: string = 'Sri Lanka SMS (Text.lk)';
 
-  private apiToken: string;
-  private senderId: string;
-  private apiUrl: string;
+  public readonly userId: string;
+  public readonly apiKey: string;
+  public readonly apiToken: string;
+  public readonly senderId: string;
+  public readonly apiBaseUrl: string;
+  public readonly apiUrl: string;
 
   constructor(config?: Partial<SriLankaSmsConfig>) {
-    this.apiToken = (config?.apiToken || process.env.SRI_LANKA_SMS_API_TOKEN || '').trim();
+    this.userId = (config?.userId || process.env.SRI_LANKA_SMS_USER_ID || '').trim();
+    this.apiKey = (config?.apiKey || config?.apiToken || process.env.SRI_LANKA_SMS_API_KEY || process.env.SRI_LANKA_SMS_API_TOKEN || '').trim();
+    this.apiToken = this.apiKey;
     this.senderId = (config?.senderId || process.env.SRI_LANKA_SMS_SENDER_ID || 'HOTELNAME').trim();
-    this.apiUrl = (config?.apiUrl || process.env.SRI_LANKA_SMS_API_URL || 'https://app.text.lk/api/v3/sms/send').trim();
+
+    // Flexible API Base URL resolution (e.g. 'https://app.text.lk/api/v3' or 'https://app.text.lk/api/v3/sms/send')
+    const rawUrl = (config?.apiBaseUrl || config?.apiUrl || process.env.SRI_LANKA_SMS_API_BASE_URL || process.env.SRI_LANKA_SMS_API_URL || 'https://app.text.lk/api/v3').trim();
+    this.apiBaseUrl = rawUrl.replace(/\/sms\/send\/?$/, '').replace(/\/$/, '');
+    this.apiUrl = rawUrl.includes('/sms/send') ? rawUrl : `${this.apiBaseUrl}/sms/send`;
+
     if (config?.provider) {
       this.key = config.provider;
     }
@@ -102,20 +115,30 @@ export class SriLankaSmsProvider implements SmsProvider {
     const activeSenderId = (options?.senderId || this.senderId || 'HOTELNAME').trim();
 
     try {
-      const payload = {
+      const payload: any = {
         recipient: normalizedRecipient,
         sender_id: activeSenderId,
         type: options?.type || 'plain',
         message: message.trim()
       };
 
+      if (this.userId) {
+        payload.user_id = this.userId;
+      }
+
+      const headers: Record<string, string> = {
+        'Authorization': `Bearer ${this.apiKey}`,
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      };
+
+      if (this.userId) {
+        headers['X-User-Id'] = this.userId;
+      }
+
       const response = await fetch(this.apiUrl, {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${this.apiToken}`,
-          'Content-Type': 'application/json',
-          'Accept': 'application/json'
-        },
+        headers,
         body: JSON.stringify(payload)
       });
 
@@ -173,13 +196,14 @@ export class SriLankaSmsProvider implements SmsProvider {
    * Retrieves message delivery status from Text.lk if available.
    */
   public async getStatus(providerMessageId: string): Promise<any> {
-    if (!this.apiToken || !providerMessageId) return null;
+    if (!this.apiKey || !providerMessageId) return null;
     try {
-      const url = `https://app.text.lk/api/v3/sms/status/${providerMessageId}`;
+      const url = `${this.apiBaseUrl}/sms/status/${providerMessageId}`;
       const response = await fetch(url, {
         headers: {
-          'Authorization': `Bearer ${this.apiToken}`,
-          'Accept': 'application/json'
+          'Authorization': `Bearer ${this.apiKey}`,
+          'Accept': 'application/json',
+          ...(this.userId ? { 'X-User-Id': this.userId } : {})
         }
       });
       if (!response.ok) return null;
@@ -193,13 +217,14 @@ export class SriLankaSmsProvider implements SmsProvider {
    * Queries account balance from Text.lk REST API.
    */
   public async getBalance(): Promise<SmsBalanceResult | null> {
-    if (!this.apiToken) return null;
+    if (!this.apiKey) return null;
     try {
-      const balanceUrl = 'https://app.text.lk/api/v3/balance';
+      const balanceUrl = `${this.apiBaseUrl}/balance`;
       const response = await fetch(balanceUrl, {
         headers: {
-          'Authorization': `Bearer ${this.apiToken}`,
-          'Accept': 'application/json'
+          'Authorization': `Bearer ${this.apiKey}`,
+          'Accept': 'application/json',
+          ...(this.userId ? { 'X-User-Id': this.userId } : {})
         }
       });
 

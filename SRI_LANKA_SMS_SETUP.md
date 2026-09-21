@@ -44,10 +44,11 @@ You can configure the Sri Lanka SMS provider either via the Admin Web Interface 
 1. Log in to the ResortCare Admin Dashboard.
 2. Navigate to **System Settings &rarr; SMS & WhatsApp Gateways** (`/admin/settings?tab=gateways`).
 3. Under **SMS Gateway Provider Architecture**, select **🇱🇰 Sri Lanka SMS (Text.lk)**.
-4. Fill in the fields:
-   * **Text.lk API Token**: Paste your Bearer token.
+4. Fill in the **API Information** fields:
+   * **User ID**: Your SMS gateway user/account identifier (e.g. `USER-10824` or client ID).
+   * **API Key**: Paste your Bearer API Key / Token generated from the SMS developer portal.
+   * **API Base URL**: Gateway endpoint URL (Default: `https://app.text.lk/api/v3` or custom endpoint).
    * **TRCSL Sender ID**: Enter your approved mask (e.g., `HOTELNAME`).
-   * **API Endpoint URL**: Default is `https://app.text.lk/api/v3/sms/send`.
 5. Click **Verify Text.lk Connection** to validate credentials.
 6. Click **Check SMS Wallet Balance** to confirm your available LKR balance.
 7. (Optional) Check **Automatic Fallback to Twilio SMS** if you have Twilio credentials configured.
@@ -60,10 +61,12 @@ You can also specify default credentials in your server `.env`:
 SMS_PROVIDER=srilanka
 SMS_FALLBACK_ENABLED=true
 
-# Sri Lanka SMS Gateway (Text.lk)
+# Sri Lanka SMS Gateway API Information
 SRI_LANKA_SMS_ENABLED=true
 SRI_LANKA_SMS_PROVIDER=textlk
-SRI_LANKA_SMS_API_TOKEN=your_textlk_bearer_token_here
+SRI_LANKA_SMS_USER_ID=your_user_id_here
+SRI_LANKA_SMS_API_KEY=your_api_key_or_token_here
+SRI_LANKA_SMS_API_BASE_URL=https://app.text.lk/api/v3
 SRI_LANKA_SMS_SENDER_ID=HOTELNAME
 SRI_LANKA_SMS_API_URL=https://app.text.lk/api/v3/sms/send
 
