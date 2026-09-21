@@ -288,11 +288,12 @@ router.post('/notifications/verify-srilanka-sms', authenticateToken, requireRole
 
     res.json({
       success: true,
-      provider: 'textlk',
+      provider: provider.key,
+      providerName: provider.name,
       status: 'active',
       balance: balanceInfo?.balance ?? null,
       currency: balanceInfo?.currency || 'LKR',
-      message: 'Successfully connected to Sri Lanka SMS API (Text.lk).'
+      message: `Successfully connected to ${provider.name}.`
     });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message || 'Error connecting to Sri Lanka SMS API' });
@@ -302,39 +303,92 @@ router.post('/notifications/verify-srilanka-sms', authenticateToken, requireRole
 // POST /api/settings/notifications/sms/test - Send Test SMS with step diagnostics
 router.post('/notifications/sms/test', authenticateToken, requireRole(['Hotel Admin', 'Super Admin']), async (req: AuthRequest, res: Response) => {
   try {
-    const { phoneNumber, message } = req.body;
-    if (!phoneNumber) {
+    const rawNumber = (req.body.phoneNumber || req.body.recipientPhone || req.body.phone || req.body.to || '').trim();
+    const { message, userId, apiKey, apiToken, apiBaseUrl, apiUrl, senderId } = req.body;
+    if (!rawNumber) {
       return res.status(400).json({ success: false, error: 'Phone number is required for test SMS.' });
     }
 
     const hotel = db.prepare(`SELECT id, name FROM hotels LIMIT 1`).get() as any;
+    const hotelId = hotel?.id || 'hotel-ocean-pearl';
     const { SriLankaSmsProvider } = await import('../services/notification/sms/srilanka.provider');
     const { SmsManagerService } = await import('../services/notification/sms/sms-manager.service');
 
-    const slValidator = new SriLankaSmsProvider();
-    const isSlValid = slValidator.validatePhoneNumber(phoneNumber);
-    const normalizedNumber = slValidator.normalizePhoneNumber(phoneNumber);
+    // Fetch existing stored settings for fallback credentials if masked or omitted
+    const row = db.prepare(`SELECT value_json FROM settings WHERE hotel_id = ? AND category = 'notifications' AND key = 'providers'`).get(hotelId) as any;
+    let storedSl: any = {};
+    if (row?.value_json) {
+      try {
+        const p = JSON.parse(row.value_json);
+        storedSl = p.sriLankaSms || {};
+      } catch {}
+    }
 
-    const testMsg = message || `🔔 [${hotel?.name || 'Hotel'} Test SMS] Hello! This is a test dispatch from the Hotel Admin Panel. Normalization: ${normalizedNumber} at ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}.`;
+    const effectiveUserId = (userId !== undefined && userId !== '') ? userId : (storedSl.userId || CONFIG.SRI_LANKA_SMS.USER_ID || '');
+    const keyCandidate = apiKey || apiToken;
+    const effectiveKey = (keyCandidate && !keyCandidate.startsWith('••••'))
+      ? keyCandidate
+      : (storedSl.apiKey || storedSl.apiToken || CONFIG.SRI_LANKA_SMS.API_KEY || CONFIG.SRI_LANKA_SMS.API_TOKEN || '');
+    const effectiveBaseUrl = apiBaseUrl || storedSl.apiBaseUrl || storedSl.apiUrl || CONFIG.SRI_LANKA_SMS.API_BASE_URL;
+    const effectiveSenderId = senderId || storedSl.senderId || CONFIG.SRI_LANKA_SMS.SENDER_ID || '';
 
-    const dispatch = await SmsManagerService.sendSms(phoneNumber, testMsg, {
-      hotelId: hotel?.id || 'hotel-ocean-pearl'
+    const slProvider = new SriLankaSmsProvider({
+      userId: effectiveUserId,
+      apiKey: effectiveKey,
+      apiToken: effectiveKey,
+      apiBaseUrl: effectiveBaseUrl,
+      apiUrl: apiUrl || storedSl.apiUrl,
+      senderId: effectiveSenderId
+    });
+
+    const isSlValid = slProvider.validatePhoneNumber(rawNumber);
+    const normalizedNumber = slProvider.normalizePhoneNumber(rawNumber);
+
+    const testMsg = message || `🔔 [${hotel?.name || 'Hotel'} Test SMS] Hello! This is a test dispatch from the Hotel Admin Panel via ${slProvider.name}. Normalization: ${normalizedNumber} at ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}.`;
+
+    // Attempt direct dispatch via configured Sri Lanka provider
+    const dispatchResult = await slProvider.sendSms(rawNumber, testMsg);
+
+    // If direct dispatch failed and fallback is enabled, attempt Twilio fallback
+    let fallbackUsed = false;
+    let finalResult = dispatchResult;
+    if (!dispatchResult.success) {
+      const fallback = SmsManagerService.getFallbackProvider(hotelId);
+      if (fallback) {
+        const fallbackRes = await fallback.sendSms(rawNumber, testMsg);
+        if (fallbackRes.success) {
+          fallbackUsed = true;
+          finalResult = fallbackRes;
+        }
+      }
+    }
+
+    // Log the test dispatch
+    SmsManagerService.logSms({
+      recipient: normalizedNumber || rawNumber,
+      provider: finalResult.provider,
+      senderId: effectiveSenderId,
+      message: testMsg,
+      providerMessageId: finalResult.providerMessageId,
+      status: finalResult.success ? 'sent' : 'failed',
+      errorCode: finalResult.errorCode,
+      errorMessage: finalResult.errorMessage
     });
 
     res.json({
-      success: dispatch.result.success,
-      recipient: normalizedNumber || phoneNumber,
-      rawRecipient: phoneNumber,
-      provider: dispatch.result.provider,
-      status: dispatch.result.status,
-      fallbackUsed: dispatch.fallbackUsed,
+      success: finalResult.success,
+      recipient: normalizedNumber || rawNumber,
+      rawRecipient: rawNumber,
+      provider: finalResult.provider,
+      status: finalResult.status,
+      fallbackUsed,
       steps: {
         phoneValid: isSlValid,
-        apiConnected: dispatch.result.status !== 'FAILED' || dispatch.result.errorCode !== 'NETWORK_OR_RUNTIME_ERROR',
-        smsAccepted: dispatch.result.success
+        apiConnected: dispatchResult.status !== 'FAILED' || dispatchResult.errorCode !== 'NETWORK_OR_RUNTIME_ERROR',
+        smsAccepted: finalResult.success
       },
-      error: dispatch.result.errorMessage,
-      result: dispatch.result
+      error: finalResult.errorMessage,
+      result: finalResult
     });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message || 'Failed to dispatch test SMS' });
@@ -346,16 +400,18 @@ router.get('/notifications/sms/balance', authenticateToken, async (req: AuthRequ
   try {
     const hotel = db.prepare(`SELECT id FROM hotels LIMIT 1`).get() as any;
     const { SmsManagerService } = await import('../services/notification/sms/sms-manager.service');
-    const primary = SmsManagerService.getPrimaryProvider(hotel?.id || 'hotel-ocean-pearl');
+    let provider = SmsManagerService.getPrimaryProvider(hotel?.id || 'hotel-ocean-pearl');
 
-    if (!primary) {
-      return res.json({ success: false, message: 'SMS is currently disabled.' });
+    if (!provider || !provider.getBalance) {
+      const { SriLankaSmsProvider } = await import('../services/notification/sms/srilanka.provider');
+      const slConfig = SmsManagerService.getHotelSmsConfig(hotel?.id || 'hotel-ocean-pearl').slConfig;
+      provider = new SriLankaSmsProvider(slConfig);
     }
 
-    const balanceInfo = await primary.getBalance();
+    const balanceInfo = await provider.getBalance();
     res.json({
       success: true,
-      provider: primary.name,
+      provider: provider.name,
       balance: balanceInfo?.balance ?? null,
       currency: balanceInfo?.currency || 'LKR'
     });

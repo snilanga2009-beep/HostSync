@@ -16,8 +16,8 @@ export interface SriLankaSmsConfig {
  * Primary implementation targets Text.lk REST API v3 with modular extension points.
  */
 export class SriLankaSmsProvider implements SmsProvider {
-  readonly key: string = 'textlk';
-  readonly name: string = 'Sri Lanka SMS (Text.lk)';
+  public key: string = 'srilanka_sms';
+  public name: string = 'Sri Lanka SMS Gateway';
 
   public readonly userId: string;
   public readonly apiKey: string;
@@ -32,10 +32,39 @@ export class SriLankaSmsProvider implements SmsProvider {
     this.apiToken = this.apiKey;
     this.senderId = (config?.senderId || process.env.SRI_LANKA_SMS_SENDER_ID || 'HOTELNAME').trim();
 
-    // Flexible API Base URL resolution (e.g. 'https://app.text.lk/api/v3' or 'https://app.text.lk/api/v3/sms/send')
-    const rawUrl = (config?.apiBaseUrl || config?.apiUrl || process.env.SRI_LANKA_SMS_API_BASE_URL || process.env.SRI_LANKA_SMS_API_URL || 'https://app.text.lk/api/v3').trim();
-    this.apiBaseUrl = rawUrl.replace(/\/sms\/send\/?$/, '').replace(/\/$/, '');
-    this.apiUrl = rawUrl.includes('/sms/send') ? rawUrl : `${this.apiBaseUrl}/sms/send`;
+    // Flexible API Base URL resolution (e.g. 'https://smslenz.lk/api', 'https://smslenz.lk/api/send-sms', or 'https://app.text.lk/api/v3')
+    const rawUrl = (
+      config?.apiBaseUrl ||
+      config?.apiUrl ||
+      process.env.SRI_LANKA_SMS_API_BASE_URL ||
+      process.env.SRI_LANKA_SMS_API_URL ||
+      'https://smslenz.lk/api'
+    ).trim();
+
+    if (rawUrl.endsWith('/send-sms') || rawUrl.endsWith('/sms/send') || rawUrl.endsWith('/send')) {
+      this.apiUrl = rawUrl;
+      this.apiBaseUrl = rawUrl.replace(/\/(send-sms|sms\/send|send)\/?$/, '');
+    } else {
+      this.apiBaseUrl = rawUrl.replace(/\/$/, '');
+      if (this.apiBaseUrl.includes('smslenz')) {
+        this.apiUrl = `${this.apiBaseUrl}/send-sms`;
+      } else if (this.apiBaseUrl.includes('notify.lk')) {
+        this.apiUrl = `${this.apiBaseUrl}/send`;
+      } else {
+        this.apiUrl = `${this.apiBaseUrl}/sms/send`;
+      }
+    }
+
+    if (this.apiBaseUrl.includes('smslenz')) {
+      this.key = 'smslenz';
+      this.name = 'Sri Lanka SMS (SMSLenz)';
+    } else if (this.apiBaseUrl.includes('text.lk') || this.apiBaseUrl.includes('textlk')) {
+      this.key = 'textlk';
+      this.name = 'Sri Lanka SMS (Text.lk)';
+    } else if (this.apiBaseUrl.includes('notify.lk')) {
+      this.key = 'notifylk';
+      this.name = 'Sri Lanka SMS (Notify.lk)';
+    }
 
     if (config?.provider) {
       this.key = config.provider;
@@ -112,26 +141,47 @@ export class SriLankaSmsProvider implements SmsProvider {
       };
     }
 
-    const activeSenderId = (options?.senderId || this.senderId || 'HOTELNAME').trim();
+    let activeSenderId = (options?.senderId || this.senderId || '').trim();
+    if (!activeSenderId || (this.apiBaseUrl.includes('smslenz') && activeSenderId === 'HOTELNAME')) {
+      activeSenderId = this.apiBaseUrl.includes('smslenz') ? 'SMSlenzDEMO' : 'HOTELNAME';
+    }
+
+    const formattedContact = normalizedRecipient.startsWith('+') ? normalizedRecipient : `+${normalizedRecipient}`;
 
     try {
       const payload: any = {
         recipient: normalizedRecipient,
+        to: normalizedRecipient,
+        contact: formattedContact,
+        phone: normalizedRecipient,
         sender_id: activeSenderId,
+        senderId: activeSenderId,
+        from: activeSenderId,
+        mask: activeSenderId,
         type: options?.type || 'plain',
-        message: message.trim()
+        message: message.trim(),
+        msg: message.trim(),
+        text: message.trim()
       };
 
       if (this.userId) {
         payload.user_id = this.userId;
+        payload.userId = this.userId;
+      }
+      if (this.apiKey) {
+        payload.api_key = this.apiKey;
+        payload.apiKey = this.apiKey;
       }
 
       const headers: Record<string, string> = {
-        'Authorization': `Bearer ${this.apiKey}`,
         'Content-Type': 'application/json',
         'Accept': 'application/json'
       };
 
+      if (this.apiKey) {
+        headers['Authorization'] = `Bearer ${this.apiKey}`;
+        headers['X-API-Key'] = this.apiKey;
+      }
       if (this.userId) {
         headers['X-User-Id'] = this.userId;
       }
@@ -162,15 +212,39 @@ export class SriLankaSmsProvider implements SmsProvider {
         };
       }
 
-      // Text.lk success response format inspection
-      // Usually returns status 'success' or data with uid/id
+      // Check if response contains an error status (even with HTTP 200)
+      if (
+        responseData?.status === 'error' ||
+        responseData?.status === 'failed' ||
+        responseData?.success === false
+      ) {
+        const errorMsg =
+          responseData?.message ||
+          responseData?.error ||
+          responseData?.data?.message ||
+          'SMS gateway reported an error dispatching message.';
+
+        return {
+          success: false,
+          provider: this.key,
+          channel: 'SMS',
+          status: 'FAILED',
+          errorCode: 'GATEWAY_REJECTED',
+          errorMessage: String(errorMsg),
+          rawResponse: responseData
+        };
+      }
+
       const messageId =
+        responseData?.data?.campaign_id ||
+        responseData?.campaign_id ||
         responseData?.data?.uid ||
         responseData?.data?.id ||
         responseData?.uid ||
         responseData?.id ||
         responseData?.message_id ||
-        `textlk-${Date.now()}`;
+        responseData?.reference ||
+        `slsms-${Date.now()}`;
 
       return {
         success: true,
@@ -193,7 +267,7 @@ export class SriLankaSmsProvider implements SmsProvider {
   }
 
   /**
-   * Retrieves message delivery status from Text.lk if available.
+   * Retrieves message delivery status from gateway if available.
    */
   public async getStatus(providerMessageId: string): Promise<any> {
     if (!this.apiKey || !providerMessageId) return null;
@@ -214,34 +288,90 @@ export class SriLankaSmsProvider implements SmsProvider {
   }
 
   /**
-   * Queries account balance from Text.lk REST API.
+   * Queries account balance from Sri Lanka SMS gateway (supports SMSLenz, Text.lk, Notify.lk).
    */
   public async getBalance(): Promise<SmsBalanceResult | null> {
     if (!this.apiKey) return null;
-    try {
-      const balanceUrl = `${this.apiBaseUrl}/balance`;
-      const response = await fetch(balanceUrl, {
-        headers: {
-          'Authorization': `Bearer ${this.apiKey}`,
-          'Accept': 'application/json',
-          ...(this.userId ? { 'X-User-Id': this.userId } : {})
+
+    // 1. If SMSLenz, query official POST /account-status endpoint
+    if (this.apiBaseUrl.includes('smslenz')) {
+      try {
+        const response = await fetch(`${this.apiBaseUrl}/account-status`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
+          },
+          body: JSON.stringify({
+            user_id: this.userId,
+            api_key: this.apiKey
+          })
+        });
+
+        if (response.ok) {
+          const data: any = await response.json().catch(() => null);
+          if (data?.success && data?.data) {
+            const rawBalance = data.data.sms_credit_balance;
+            const balanceNum = typeof rawBalance === 'string'
+              ? parseFloat(rawBalance.replace(/,/g, ''))
+              : (typeof rawBalance === 'number' ? rawBalance : 0);
+
+            return {
+              balance: isNaN(balanceNum) ? 0 : balanceNum,
+              currency: 'LKR',
+              raw: data
+            };
+          }
         }
-      });
-
-      if (!response.ok) return null;
-      const data: any = await response.json();
-
-      // Parse balance from data payload
-      const balanceValue =
-        parseFloat(data?.data?.remaining_balance || data?.data?.balance || data?.balance || '0');
-
-      return {
-        balance: isNaN(balanceValue) ? 0 : balanceValue,
-        currency: data?.data?.currency || 'LKR',
-        raw: data
-      };
-    } catch {
-      return null;
+      } catch (err) {
+        console.warn('Failed to query SMSLenz account-status:', err);
+      }
     }
+
+    const candidateUrls = [
+      `${this.apiBaseUrl}/check-balance`,
+      `${this.apiBaseUrl}/balance`,
+      `${this.apiBaseUrl}/get-balance`
+    ];
+
+    for (const url of candidateUrls) {
+      try {
+        const queryParams = new URLSearchParams();
+        if (this.userId) queryParams.append('user_id', this.userId);
+        if (this.apiKey) queryParams.append('api_key', this.apiKey);
+
+        const fetchUrl = `${url}?${queryParams.toString()}`;
+        const response = await fetch(fetchUrl, {
+          headers: {
+            'Authorization': `Bearer ${this.apiKey}`,
+            'Accept': 'application/json',
+            ...(this.userId ? { 'X-User-Id': this.userId } : {})
+          }
+        });
+
+        if (response.ok) {
+          const data: any = await response.json().catch(() => null);
+          if (data) {
+            const balanceValue = parseFloat(
+              data?.data?.remaining_balance ||
+              data?.data?.balance ||
+              data?.balance ||
+              data?.credits ||
+              data?.remaining_credits ||
+              data?.sms_balance ||
+              data?.data?.credits ||
+              '0'
+            );
+
+            return {
+              balance: isNaN(balanceValue) ? 0 : balanceValue,
+              currency: data?.data?.currency || data?.currency || 'LKR',
+              raw: data
+            };
+          }
+        }
+      } catch {}
+    }
+    return null;
   }
 }

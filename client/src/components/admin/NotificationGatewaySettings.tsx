@@ -245,8 +245,13 @@ export const NotificationGatewaySettings: React.FC = () => {
     setTestSmsResult(null);
     try {
       const res = await api.post<any>('/settings/notifications/sms/test', {
+        phoneNumber: testSmsPhone,
         recipientPhone: testSmsPhone,
-        message: testSmsMessage || undefined
+        message: testSmsMessage || undefined,
+        userId: sriLankaUserId,
+        apiKey: sriLankaApiKey.startsWith('••••') ? '' : sriLankaApiKey,
+        apiBaseUrl: sriLankaApiBaseUrl,
+        senderId: sriLankaSenderId
       });
       setTestSmsResult({
         success: Boolean(res.success),
@@ -558,16 +563,20 @@ export const NotificationGatewaySettings: React.FC = () => {
             </div>
           </div>
 
-          {/* ================= SRI LANKA SMS (TEXT.LK) CONFIGURATION ================= */}
-          {smsProvider === 'srilanka' && (
+          {/* ================= SRI LANKA SMS CONFIGURATION ================= */}
+          {smsProvider === 'srilanka' && (() => {
+            const isSmsLenz = sriLankaApiBaseUrl.toLowerCase().includes('smslenz');
+            const slGatewayName = isSmsLenz ? 'SMSLenz' : (sriLankaApiBaseUrl.toLowerCase().includes('text.lk') || sriLankaApiBaseUrl.toLowerCase().includes('textlk') ? 'Text.lk' : 'Sri Lanka SMS Gateway');
+
+            return (
             <div className="space-y-4 pt-2 border-t border-slate-100">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <span className="text-xs font-bold text-slate-800 uppercase tracking-wider">
-                    Text.lk REST API Credentials
+                    {slGatewayName} REST API Credentials
                   </span>
                   <span className="text-[10px] font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
-                    Replaceable Sri Lanka Gateway
+                    Replaceable Sri Lanka Gateway ({slGatewayName})
                   </span>
                 </div>
 
@@ -580,6 +589,40 @@ export const NotificationGatewaySettings: React.FC = () => {
                   />
                   <span>Enable Sri Lanka SMS</span>
                 </label>
+              </div>
+
+              {/* Quick Gateway Presets */}
+              <div className="flex items-center gap-2 text-xs bg-slate-100/70 p-2 rounded-xl border border-slate-200">
+                <span className="text-[11px] font-bold text-slate-600">Quick Gateway Preset:</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSriLankaApiBaseUrl('https://smslenz.lk/api');
+                    if (!sriLankaSenderId || sriLankaSenderId === 'HOTELNAME') {
+                      setSriLankaSenderId('SMSlenzDEMO');
+                    }
+                  }}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all ${
+                    isSmsLenz
+                      ? 'bg-amber-600 text-white shadow-sm'
+                      : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-50'
+                  }`}
+                >
+                  ⚡ SMSLenz (smslenz.lk)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSriLankaApiBaseUrl('https://app.text.lk/api/v3');
+                  }}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all ${
+                    !isSmsLenz
+                      ? 'bg-brand-600 text-white shadow-sm'
+                      : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-50'
+                  }`}
+                >
+                  Text.lk (text.lk)
+                </button>
               </div>
 
               {/* ================= API INFORMATION ================= */}
@@ -600,16 +643,18 @@ export const NotificationGatewaySettings: React.FC = () => {
                   {/* User ID */}
                   <div>
                     <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                      User ID
+                      User ID {isSmsLenz && <span className="text-amber-600">*</span>}
                     </label>
                     <input
                       type="text"
-                      placeholder="e.g. USER-10824 or Account ID"
+                      placeholder={isSmsLenz ? "e.g. 2561" : "e.g. USER-10824 or Account ID"}
                       value={sriLankaUserId}
                       onChange={(e) => setSriLankaUserId(e.target.value.trim())}
                       className="w-full text-xs font-mono p-2.5 border border-slate-200 rounded-xl bg-white focus:ring-2 focus:ring-brand-500 focus:outline-none"
                     />
-                    <span className="text-[10px] text-slate-400 mt-1 block">Your SMS provider account or user identifier</span>
+                    <span className="text-[10px] text-slate-400 mt-1 block">
+                      {isSmsLenz ? 'Your SMSLenz User ID (shown on your SMSLenz API page)' : 'Your SMS provider account or user identifier'}
+                    </span>
                   </div>
 
                   {/* API Key */}
@@ -627,7 +672,7 @@ export const NotificationGatewaySettings: React.FC = () => {
                     <div className="relative">
                       <input
                         type={showSriLankaKey ? 'text' : 'password'}
-                        placeholder="Enter Bearer API Key / Token"
+                        placeholder={isSmsLenz ? "e.g. 5f22d714-1a7d-42f1-a1c5-943b576d0691" : "Enter Bearer API Key / Token"}
                         value={sriLankaApiKey}
                         onChange={(e) => setSriLankaApiKey(e.target.value.trim())}
                         className="w-full text-xs font-mono p-2.5 pr-10 border border-slate-200 rounded-xl bg-white focus:ring-2 focus:ring-brand-500 focus:outline-none"
@@ -640,7 +685,9 @@ export const NotificationGatewaySettings: React.FC = () => {
                         {showSriLankaKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                       </button>
                     </div>
-                    <span className="text-[10px] text-slate-400 mt-1 block">From app.text.lk &rarr; API & Integrations &rarr; API Tokens</span>
+                    <span className="text-[10px] text-slate-400 mt-1 block">
+                      {isSmsLenz ? 'From smslenz.lk -> API Settings -> API Key' : 'From app.text.lk -> API & Integrations -> API Tokens'}
+                    </span>
                   </div>
                 </div>
 
@@ -652,12 +699,14 @@ export const NotificationGatewaySettings: React.FC = () => {
                     </label>
                     <input
                       type="url"
-                      placeholder="https://app.text.lk/api/v3"
+                      placeholder={isSmsLenz ? "https://smslenz.lk/api" : "https://app.text.lk/api/v3"}
                       value={sriLankaApiBaseUrl}
                       onChange={(e) => setSriLankaApiBaseUrl(e.target.value.trim())}
                       className="w-full text-xs font-mono p-2.5 border border-slate-200 rounded-xl bg-white focus:ring-2 focus:ring-brand-500 focus:outline-none"
                     />
-                    <span className="text-[10px] text-slate-400 mt-1 block">Default: https://app.text.lk/api/v3</span>
+                    <span className="text-[10px] text-slate-400 mt-1 block">
+                      {isSmsLenz ? 'SMSLenz API Base: https://smslenz.lk/api' : 'Default: https://app.text.lk/api/v3'}
+                    </span>
                   </div>
 
                   {/* TRCSL Sender ID */}
@@ -667,12 +716,14 @@ export const NotificationGatewaySettings: React.FC = () => {
                     </label>
                     <input
                       type="text"
-                      placeholder="HOTELNAME"
+                      placeholder={isSmsLenz ? "SMSlenzDEMO" : "HOTELNAME"}
                       value={sriLankaSenderId}
-                      onChange={(e) => setSriLankaSenderId(e.target.value.trim().toUpperCase())}
+                      onChange={(e) => setSriLankaSenderId(e.target.value.trim())}
                       className="w-full text-xs font-mono p-2.5 border border-slate-200 rounded-xl bg-white focus:ring-2 focus:ring-brand-500 focus:outline-none"
                     />
-                    <span className="text-[10px] text-slate-400 mt-1 block">Your TRCSL approved Sender Mask (max 11 chars alphanumeric)</span>
+                    <span className="text-[10px] text-slate-400 mt-1 block">
+                      {isSmsLenz ? 'Approved mask, or use "SMSlenzDEMO" for trial testing' : 'Your TRCSL approved Sender Mask (max 11 chars alphanumeric)'}
+                    </span>
                   </div>
                 </div>
               </div>
@@ -686,7 +737,7 @@ export const NotificationGatewaySettings: React.FC = () => {
                   className="w-full sm:w-auto py-2.5 px-4 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl text-xs font-bold transition-colors flex items-center justify-center gap-1.5 disabled:opacity-50"
                 >
                   {verifyingSriLanka ? <Loader2 className="w-4 h-4 animate-spin text-brand-600" /> : <ShieldCheck className="w-4 h-4 text-emerald-600" />}
-                  Verify Text.lk Connection
+                  Verify {slGatewayName} Connection
                 </button>
 
                 <button
@@ -732,11 +783,11 @@ export const NotificationGatewaySettings: React.FC = () => {
                 />
               </div>
 
-              {/* Text.lk Webhook URL */}
+              {/* Sri Lanka SMS Webhook URL */}
               <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-1.5">
                 <div className="flex items-center justify-between">
                   <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
-                    Text.lk Delivery Report (DLR) Webhook URL
+                    {slGatewayName} Delivery Report (DLR) Webhook URL
                   </span>
                   <button
                     type="button"
@@ -755,7 +806,7 @@ export const NotificationGatewaySettings: React.FC = () => {
                 <div className="flex items-center gap-2">
                   <Smartphone className="w-4 h-4 text-amber-700" />
                   <h4 className="text-xs font-extrabold text-amber-950 uppercase tracking-wider">
-                    Sri Lanka SMS Test & Diagnostics
+                    {slGatewayName} SMS Test & Diagnostics
                   </h4>
                 </div>
                 <p className="text-[11px] text-amber-800">
@@ -798,7 +849,7 @@ export const NotificationGatewaySettings: React.FC = () => {
                   }`}>
                     <div className="flex items-center gap-2 font-bold">
                       {testSmsResult.success ? <CheckCircle2 className="w-4 h-4 text-emerald-600" /> : <XCircle className="w-4 h-4 text-rose-600" />}
-                      <span>{testSmsResult.success ? 'Test SMS Accepted by Sri Lanka Gateway!' : 'Test SMS Dispatch Failed'}</span>
+                      <span>{testSmsResult.success ? `Test SMS Accepted by ${slGatewayName}!` : 'Test SMS Dispatch Failed'}</span>
                       <span className="text-[10px] font-mono text-slate-500">({testSmsResult.recipient})</span>
                     </div>
 
@@ -808,7 +859,7 @@ export const NotificationGatewaySettings: React.FC = () => {
                           {testSmsResult.steps.phoneValid ? '✓ Phone Valid (SL Format)' : '✗ Invalid SL Phone'}
                         </span>
                         <span className={`px-2 py-0.5 rounded font-bold ${testSmsResult.steps.apiConnected ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'}`}>
-                          {testSmsResult.steps.apiConnected ? '✓ Text.lk API Authenticated' : '✗ API Auth Failed'}
+                          {testSmsResult.steps.apiConnected ? `✓ ${slGatewayName} API Authenticated` : '✗ API Auth Failed'}
                         </span>
                         <span className={`px-2 py-0.5 rounded font-bold ${testSmsResult.steps.smsAccepted ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'}`}>
                           {testSmsResult.steps.smsAccepted ? '✓ Gateway Accepted' : '✗ Gateway Rejected'}
@@ -823,7 +874,8 @@ export const NotificationGatewaySettings: React.FC = () => {
                 )}
               </div>
             </div>
-          )}
+            );
+          })()}
 
           {/* ================= TWILIO SMS CONFIGURATION (PRIMARY OR FALLBACK) ================= */}
           {(smsProvider === 'twilio' || (smsProvider === 'srilanka' && smsFallbackEnabled)) && (
