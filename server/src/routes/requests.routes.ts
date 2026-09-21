@@ -731,6 +731,17 @@ router.all(['/services/:id/assign'], authenticateToken, async (req: AuthRequest,
       return res.status(400).json({ error: 'Staff member selection is required.' });
     }
 
+    const request = db.prepare(`
+      SELECT gsr.*, r.room_number 
+      FROM guest_service_requests gsr 
+      LEFT JOIN rooms r ON gsr.room_id = r.id 
+      WHERE gsr.id = ?
+    `).get(id) as any;
+
+    if (!request) {
+      return res.status(404).json({ error: 'Service request not found.' });
+    }
+
     const staff = db.prepare(`
       SELECT sp.*, u.full_name, u.id as user_id FROM staff_profiles sp JOIN users u ON sp.user_id = u.id WHERE sp.id = ?
     `).get(effectiveStaffId) as any;
@@ -745,7 +756,41 @@ router.all(['/services/:id/assign'], authenticateToken, async (req: AuthRequest,
       WHERE id = ?
     `).run(id);
 
-    res.json({ success: true, message: `Service request assigned to ${staff.full_name}.` });
+    // Revoke old tokens
+    JobTokenService.revokeTokensForRequest(id, 'Job reassigned');
+
+    // Generate fresh secure job link
+    const jobToken = JobTokenService.createJobToken({
+      requestId: id,
+      staffId: effectiveStaffId,
+      hotelId: request.hotel_id,
+      roomId: request.room_id
+    });
+
+    // Dispatch SMS / WhatsApp notification to technician's mobile phone
+    const notifResult = await NotificationService.sendJobAssigned({
+      requestId: id,
+      staffId: effectiveStaffId,
+      jobToken: jobToken.token,
+      jobUrl: jobToken.jobUrl,
+      assignedByUserId: req.user?.id
+    });
+
+    sseService.broadcastToUser(staff.user_id, 'TASK_ASSIGNED', {
+      requestId: id,
+      requestCode: request.request_code,
+      roomNumber: request.room_number,
+      priority: request.priority || 'Normal',
+      jobUrl: jobToken.jobUrl
+    });
+
+    res.json({
+      success: true,
+      message: `Service request assigned to ${staff.full_name}.`,
+      jobToken: jobToken.token,
+      jobUrl: jobToken.jobUrl,
+      notification: notifResult
+    });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

@@ -74,20 +74,31 @@ export class SmsManagerService {
   public static getPrimaryProvider(hotelId: string = 'hotel-ocean-pearl'): SmsProvider | null {
     const config = this.getHotelSmsConfig(hotelId);
 
-    if (config.mode === 'simulator' && config.activeProvider !== 'disabled') {
-      return new SimulatorSmsAdapter();
+    if (config.activeProvider === 'disabled') {
+      return null; // Disabled (Free-tier mode)
     }
 
-    if (config.activeProvider === 'srilanka' && config.slConfig.enabled) {
+    // 1. If Sri Lanka SMS is selected and has credentials, use live SriLankaSmsProvider
+    if (config.activeProvider === 'srilanka' && config.slConfig.enabled && config.slConfig.apiKey) {
       return new SriLankaSmsProvider(config.slConfig);
     }
 
-    if (config.activeProvider === 'twilio' && config.twilioConfig.enabled) {
+    // 2. If Twilio SMS is selected and has credentials, use live TwilioSmsAdapter
+    if (config.activeProvider === 'twilio' && config.twilioConfig.enabled && config.twilioConfig.accountSid && config.twilioConfig.authToken) {
       return new TwilioSmsAdapter(config.twilioConfig);
     }
 
-    if (config.activeProvider === 'simulator') {
+    // 3. Explicit simulator or sandbox simulator when no live keys are configured
+    if (config.activeProvider === 'simulator' || config.mode === 'simulator') {
       return new SimulatorSmsAdapter();
+    }
+
+    // 4. Fallback if srilanka or twilio was chosen without complete keys
+    if (config.activeProvider === 'srilanka' && config.slConfig.enabled) {
+      return new SriLankaSmsProvider(config.slConfig);
+    }
+    if (config.activeProvider === 'twilio' && config.twilioConfig.enabled) {
+      return new TwilioSmsAdapter(config.twilioConfig);
     }
 
     return null; // Disabled

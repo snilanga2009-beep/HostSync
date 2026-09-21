@@ -60,6 +60,7 @@ router.get('/notifications/providers', authenticateToken, (req: AuthRequest, res
 
     res.json({
       mode: stored.mode || (twilioSid || slToken ? 'live' : 'simulator'),
+      publicBaseUrl: stored.publicBaseUrl || (CONFIG.BASE_URL.includes('localhost') ? 'http://192.168.1.12:5173' : CONFIG.BASE_URL),
       smsProvider,
       smsFallbackEnabled,
       sriLankaSms: {
@@ -147,7 +148,8 @@ router.put('/notifications/providers', authenticateToken, requireRole(['Hotel Ad
     }
 
     const mergedSettings = {
-      mode: payload.mode || 'simulator',
+      mode: payload.mode || (newSlToken || newTwilioAuth ? 'live' : existing.mode || 'live'),
+      publicBaseUrl: payload.publicBaseUrl ? String(payload.publicBaseUrl).trim() : (existing.publicBaseUrl || ''),
       smsProvider: payload.smsProvider || 'srilanka',
       smsFallbackEnabled: payload.smsFallbackEnabled !== undefined ? Boolean(payload.smsFallbackEnabled) : true,
       sriLankaSms: {

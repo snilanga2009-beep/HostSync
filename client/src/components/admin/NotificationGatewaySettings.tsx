@@ -38,6 +38,7 @@ export const NotificationGatewaySettings: React.FC = () => {
   // SMS Provider Selection: 'srilanka' | 'twilio' | 'disabled'
   const [smsProvider, setSmsProvider] = useState<'srilanka' | 'twilio' | 'disabled'>('srilanka');
   const [smsFallbackEnabled, setSmsFallbackEnabled] = useState(true);
+  const [publicBaseUrl, setPublicBaseUrl] = useState('');
 
   // Sri Lanka SMS (Text.lk) API Information
   const [sriLankaEnabled, setSriLankaEnabled] = useState(true);
@@ -120,6 +121,9 @@ export const NotificationGatewaySettings: React.FC = () => {
       }
       if (typeof res.smsFallbackEnabled === 'boolean') {
         setSmsFallbackEnabled(res.smsFallbackEnabled);
+      }
+      if (res.publicBaseUrl) {
+        setPublicBaseUrl(res.publicBaseUrl);
       }
 
       if (res.sriLankaSms) {
@@ -354,6 +358,7 @@ export const NotificationGatewaySettings: React.FC = () => {
     try {
       await api.put('/settings/notifications/providers', {
         mode,
+        publicBaseUrl,
         smsProvider,
         smsFallbackEnabled,
         sriLankaSms: {
@@ -475,6 +480,70 @@ export const NotificationGatewaySettings: React.FC = () => {
 
       {/* Main Configuration Form */}
       <form onSubmit={handleSaveAll} className="space-y-6">
+        {/* ================= PUBLIC MOBILE LINK URL CONFIGURATION ================= */}
+        <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-xs space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-slate-100">
+            <div className="flex items-center gap-2.5">
+              <div className="w-9 h-9 rounded-xl bg-indigo-100 text-indigo-700 flex items-center justify-center font-black text-xs shadow-xs">
+                <Globe className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-sm font-extrabold text-slate-900">Staff Mobile Action Link Base URL</h3>
+                <p className="text-xs text-slate-500">Domain or network IP address used when generating SMS & WhatsApp dispatch links (e.g. /job/:token)</p>
+              </div>
+            </div>
+            {publicBaseUrl ? (
+              <span className="px-2.5 py-0.5 rounded-full text-[11px] font-extrabold bg-indigo-50 text-indigo-700 border border-indigo-200">
+                Custom URL Active
+              </span>
+            ) : (
+              <span className="px-2.5 py-0.5 rounded-full text-[11px] font-extrabold bg-slate-100 text-slate-600">
+                Auto-Detecting Network IP
+              </span>
+            )}
+          </div>
+
+          <div className="space-y-3">
+            <div>
+              <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                Staff Job Link Base URL
+              </label>
+              <div className="flex flex-col sm:flex-row gap-2">
+                <div className="relative flex-1">
+                  <input
+                    type="url"
+                    placeholder="http://192.168.1.12:5173 or https://resortcare.yourhotel.com"
+                    value={publicBaseUrl}
+                    onChange={(e) => setPublicBaseUrl(e.target.value)}
+                    className="w-full text-xs font-mono bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:bg-white"
+                  />
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setPublicBaseUrl('http://192.168.1.12:5173')}
+                    className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-all shrink-0"
+                    title="Fill with current local Wi-Fi LAN IP address"
+                  >
+                    Use Local LAN IP (192.168.1.12)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPublicBaseUrl(window.location.origin)}
+                    className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-all shrink-0"
+                    title="Fill with current browser origin"
+                  >
+                    Current Origin
+                  </button>
+                </div>
+              </div>
+              <p className="text-[11px] text-slate-500 mt-1.5 leading-relaxed">
+                💡 When staff receive an assignment SMS or WhatsApp message, the link sent to their phone will be: <code className="bg-slate-100 text-brand-700 px-1.5 py-0.5 rounded font-mono font-bold text-[10px]">{publicBaseUrl || 'http://192.168.1.12:5173'}/job/{"<token>"}</code>. Because phones cannot resolve <code className="bg-slate-100 text-slate-600 px-1 rounded font-mono text-[10px]">localhost</code>, using your Wi-Fi LAN IP or public production domain ensures technicians can open and complete jobs directly on their mobile devices.
+              </p>
+            </div>
+          </div>
+        </div>
+
         {/* ================= SMS PROVIDER ARCHITECTURE ================= */}
         <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-xs space-y-5">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-slate-100">

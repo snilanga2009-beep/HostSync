@@ -61,14 +61,49 @@ export class JobTokenService {
       ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, datetime('now'))
     `).run(id, rawToken, requestId, staffId, hotelId, roomId, expiresAt);
 
-    const jobUrl = `${CONFIG.BASE_URL}/job/${rawToken}`;
+    // Resolve accessible base URL for mobile smartphones
+    let baseWebUrl = CONFIG.BASE_URL;
+    try {
+      const row = db.prepare(`
+        SELECT value_json FROM settings WHERE hotel_id = ? AND category = 'notifications' AND key = 'providers'
+      `).get(hotelId) as any;
+      if (row?.value_json) {
+        const p = JSON.parse(row.value_json);
+        if (p.publicBaseUrl && typeof p.publicBaseUrl === 'string' && p.publicBaseUrl.trim().startsWith('http')) {
+          baseWebUrl = p.publicBaseUrl.trim().replace(/\/$/, '');
+        }
+      }
+    } catch {}
+
+    if (baseWebUrl.includes('localhost')) {
+      if (process.env.PUBLIC_URL && process.env.PUBLIC_URL.startsWith('http')) {
+        baseWebUrl = process.env.PUBLIC_URL.trim().replace(/\/$/, '');
+      } else {
+        // Auto-detect local Wi-Fi / LAN IP for mobile device access on same network
+        try {
+          const os = require('os');
+          const nets = os.networkInterfaces();
+          for (const name of Object.keys(nets)) {
+            for (const net of nets[name]) {
+              if (net.family === 'IPv4' && !net.internal) {
+                baseWebUrl = `http://${net.address}:5173`;
+                break;
+              }
+            }
+            if (!baseWebUrl.includes('localhost')) break;
+          }
+        } catch {}
+      }
+    }
+
+    const jobUrl = `${baseWebUrl}/job/${rawToken}`;
 
     recordAuditLog({
       hotelId,
       action: 'JOB_TOKEN_CREATED',
       entity: 'job_tokens',
       entityId: id,
-      details: { requestId, staffId, expiryHours, expiresAt }
+      details: { requestId, staffId, expiryHours, expiresAt, jobUrl }
     });
 
     return { id, token: rawToken, jobUrl, expiresAt };

@@ -160,17 +160,41 @@ export class NotificationService {
   }): Promise<{ smsResult?: NotificationResult; whatsappResult?: NotificationResult; fallbackUsed: boolean }> {
     const { requestId, staffId, jobToken, jobUrl } = params;
 
-    const request = db.prepare(`
+    let request = db.prepare(`
       SELECT mr.*, r.room_number, h.id as hotel_id, h.name as hotel_name,
              (SELECT GROUP_CONCAT(mri.item_name || ': ' || mri.problem_type, ', ')
               FROM maintenance_request_items mri WHERE mri.request_id = mr.id) as items_summary,
              (SELECT mri.item_name FROM maintenance_request_items mri WHERE mri.request_id = mr.id LIMIT 1) as first_item,
              (SELECT mri.problem_type FROM maintenance_request_items mri WHERE mri.request_id = mr.id LIMIT 1) as first_problem
       FROM maintenance_requests mr
-      JOIN rooms r ON mr.room_id = r.id
-      JOIN hotels h ON mr.hotel_id = h.id
+      LEFT JOIN rooms r ON mr.room_id = r.id
+      LEFT JOIN hotels h ON mr.hotel_id = h.id
       WHERE mr.id = ?
     `).get(requestId) as any;
+
+    let jobType = 'Maintenance';
+    let itemName = request?.first_item || 'Room Equipment';
+    let problemType = request?.first_problem || 'Reported Issue';
+
+    if (!request) {
+      const gsr = db.prepare(`
+        SELECT gsr.*, r.room_number, h.id as hotel_id, h.name as hotel_name,
+               (SELECT GROUP_CONCAT(gsri.item_name, ', ')
+                FROM guest_service_request_items gsri WHERE gsri.request_id = gsr.id) as items_summary,
+               (SELECT gsri.item_name FROM guest_service_request_items gsri WHERE gsri.request_id = gsr.id LIMIT 1) as first_item
+        FROM guest_service_requests gsr
+        LEFT JOIN rooms r ON gsr.room_id = r.id
+        LEFT JOIN hotels h ON gsr.hotel_id = h.id
+        WHERE gsr.id = ?
+      `).get(requestId) as any;
+
+      if (gsr) {
+        request = gsr;
+        jobType = gsr.service_type || 'Guest Service';
+        itemName = gsr.first_item || gsr.items_summary || 'Service Request';
+        problemType = gsr.special_instructions || 'Guest Service Order';
+      }
+    }
 
     const staff = db.prepare(`
       SELECT sp.*, u.full_name, u.phone as user_phone
@@ -180,6 +204,7 @@ export class NotificationService {
     `).get(staffId) as any;
 
     if (!request || !staff) {
+      console.warn(`[NotificationService] Cannot dispatch: request (${Boolean(request)}) or staff (${Boolean(staff)}) not found for id ${requestId}, staff ${staffId}`);
       return { fallbackUsed: false };
     }
 
@@ -187,23 +212,23 @@ export class NotificationService {
 
     const payload: JobNotificationPayload = {
       hotelName: request.hotel_name || 'Ocean Pearl Resort',
-      roomNumber: request.room_number,
-      jobType: 'Maintenance',
-      itemName: request.first_item || 'Room Equipment',
-      problemType: request.first_problem || 'Reported Issue',
+      roomNumber: request.room_number || 'General',
+      jobType,
+      itemName,
+      problemType,
       priority: request.priority || 'Normal',
-      description: request.description,
+      description: request.description || request.special_instructions || '',
       jobUrl,
       jobToken,
       staffName: staff.full_name,
       createdAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     };
 
-    // Construct short SMS message
+    // Construct concise, clean SMS message
     const smsMessage =
 `HOTEL JOB
 Room: ${payload.roomNumber}
-Service: ${payload.jobType || 'Maintenance'}
+Service: ${payload.jobType}
 Item: ${payload.itemName}
 Problem: ${payload.problemType}
 Priority: ${payload.priority.toUpperCase()}
@@ -211,149 +236,94 @@ Priority: ${payload.priority.toUpperCase()}
 View & Accept:
 ${payload.jobUrl}`;
 
-    const mobilePhone = (staff.phone || staff.user_phone || '').trim();
-    const waNumber = (staff.whatsapp_number || mobilePhone).trim();
+    const mobilePhone = (staff.phone || staff.user_phone || '').replace(/[\s()-]/g, '').trim();
+    const waNumber = (staff.whatsapp_number || mobilePhone).replace(/[\s()-]/g, '').trim();
 
     let smsResult: NotificationResult | undefined;
     let whatsappResult: NotificationResult | undefined;
     let fallbackUsed = false;
 
-    const isEmergency = request.priority === 'Emergency';
-    const preferredChannel = (staff.preferred_channel || 'whatsapp').toLowerCase();
+    const isEmergency = (request.priority || '').toLowerCase() === 'emergency';
+    const preferredChannel = (staff.preferred_channel || 'sms').toLowerCase();
     const smsEnabled = staff.sms_enabled !== 0;
     const waEnabled = staff.whatsapp_enabled !== 0 && staff.whatsapp_available !== 0;
     const fallbackEnabled = staff.fallback_enabled !== 0;
 
-    // 1. If Emergency, send BOTH SMS and WhatsApp immediately
-    if (isEmergency) {
-      if (waEnabled && waNumber) {
-        whatsappResult = await waProvider.sendWhatsApp(waNumber, payload);
-        this.logNotification({
-          jobId: requestId,
-          staffId,
-          channel: 'WhatsApp',
-          provider: waProvider.name,
-          recipient: waNumber,
-          messageTemplate: 'New Hotel Job Assignment (Emergency)',
-          providerMessageId: whatsappResult.providerMessageId,
-          status: whatsappResult.status,
-          errorCode: whatsappResult.errorCode,
-          errorMessage: whatsappResult.errorMessage,
-          payload
-        });
+    // Check if WhatsApp is actually live (Meta Cloud API with credentials or Twilio WhatsApp)
+    const isWaLive = Boolean(waProvider && waProvider.name !== 'Simulator WhatsApp' && waProvider.name !== 'simulator');
+
+    // Helper: Send SMS
+    const dispatchSms = async (isFallback = false) => {
+      if (!smsEnabled || !mobilePhone) return;
+      const smsDispatch = await SmsManagerService.sendSms(mobilePhone, smsMessage, {
+        jobId: requestId,
+        staffId,
+        hotelId: request.hotel_id
+      });
+      smsResult = smsDispatch.result;
+      if (smsDispatch.fallbackUsed) fallbackUsed = true;
+
+      this.logNotification({
+        jobId: requestId,
+        staffId,
+        channel: 'SMS',
+        provider: smsResult.provider || 'SMS',
+        recipient: mobilePhone,
+        messageTemplate: isFallback ? 'Job Notification SMS (Fallback)' : 'Job Notification SMS',
+        providerMessageId: smsResult.providerMessageId,
+        status: smsResult.status,
+        errorCode: smsResult.errorCode,
+        errorMessage: smsResult.errorMessage,
+        fallbackUsed: isFallback ? 1 : 0,
+        payload: { smsMessage, jobUrl: payload.jobUrl }
+      });
+    };
+
+    // Helper: Send WhatsApp
+    const dispatchWhatsApp = async (isFallback = false) => {
+      if (!waEnabled || !waNumber) return;
+      whatsappResult = await waProvider.sendWhatsApp(waNumber, payload);
+
+      this.logNotification({
+        jobId: requestId,
+        staffId,
+        channel: 'WhatsApp',
+        provider: waProvider.name,
+        recipient: waNumber,
+        messageTemplate: isFallback ? 'New Hotel Job Assignment (Fallback)' : 'New Hotel Job Assignment',
+        providerMessageId: whatsappResult.providerMessageId,
+        status: whatsappResult.status,
+        errorCode: whatsappResult.errorCode,
+        errorMessage: whatsappResult.errorMessage,
+        fallbackUsed: isFallback ? 1 : 0,
+        payload
+      });
+    };
+
+    // 1. Emergency or Both Preferred: Dispatch to all live channels
+    if (isEmergency || preferredChannel === 'both') {
+      if (isWaLive && waEnabled && waNumber) {
+        await dispatchWhatsApp();
       }
-
-      if (smsEnabled && mobilePhone) {
-        const smsDispatch = await SmsManagerService.sendSms(mobilePhone, smsMessage, {
-          jobId: requestId,
-          staffId,
-          hotelId: request.hotel_id
-        });
-        smsResult = smsDispatch.result;
-        if (smsDispatch.fallbackUsed) fallbackUsed = true;
-
-        this.logNotification({
-          jobId: requestId,
-          staffId,
-          channel: 'SMS',
-          provider: smsResult.provider || 'SMS',
-          recipient: mobilePhone,
-          messageTemplate: 'Job Notification SMS (Emergency)',
-          providerMessageId: smsResult.providerMessageId,
-          status: smsResult.status,
-          errorCode: smsResult.errorCode,
-          errorMessage: smsResult.errorMessage,
-          payload: { smsMessage }
-        });
+      await dispatchSms();
+    } else if (preferredChannel === 'whatsapp') {
+      // 2. WhatsApp Preferred:
+      if (isWaLive && waEnabled && waNumber) {
+        await dispatchWhatsApp();
+        if (!whatsappResult?.success && fallbackEnabled) {
+          fallbackUsed = true;
+          await dispatchSms(true);
+        }
+      } else {
+        // WhatsApp is not live/configured: Deliver via SMS immediately so staff receives the job link!
+        await dispatchSms();
       }
     } else {
-      // 2. Normal / High Priority: Send via preferred channel
-      if (preferredChannel === 'whatsapp' && waEnabled && waNumber) {
-        whatsappResult = await waProvider.sendWhatsApp(waNumber, payload);
-
-        this.logNotification({
-          jobId: requestId,
-          staffId,
-          channel: 'WhatsApp',
-          provider: waProvider.name,
-          recipient: waNumber,
-          messageTemplate: 'New Hotel Job Assignment',
-          providerMessageId: whatsappResult.providerMessageId,
-          status: whatsappResult.status,
-          errorCode: whatsappResult.errorCode,
-          errorMessage: whatsappResult.errorMessage,
-          payload
-        });
-
-        // Check for WhatsApp failure and trigger automatic fallback to SMS
-        if (!whatsappResult.success && fallbackEnabled && smsEnabled && mobilePhone) {
-          fallbackUsed = true;
-          const smsDispatch = await SmsManagerService.sendSms(mobilePhone, smsMessage, {
-            jobId: requestId,
-            staffId,
-            hotelId: request.hotel_id
-          });
-          smsResult = smsDispatch.result;
-
-          this.logNotification({
-            jobId: requestId,
-            staffId,
-            channel: 'SMS',
-            provider: smsResult.provider || 'SMS',
-            recipient: mobilePhone,
-            messageTemplate: 'Job Notification SMS (Fallback)',
-            providerMessageId: smsResult.providerMessageId,
-            status: smsResult.status,
-            errorCode: smsResult.errorCode,
-            errorMessage: smsResult.errorMessage,
-            fallbackUsed: 1,
-            payload: { reason: 'WhatsApp delivery failed, automatic fallback to SMS', smsMessage }
-          });
-        }
-      } else if (smsEnabled && mobilePhone) {
-        // SMS preferred
-        const smsDispatch = await SmsManagerService.sendSms(mobilePhone, smsMessage, {
-          jobId: requestId,
-          staffId,
-          hotelId: request.hotel_id
-        });
-        smsResult = smsDispatch.result;
-        if (smsDispatch.fallbackUsed) fallbackUsed = true;
-
-        this.logNotification({
-          jobId: requestId,
-          staffId,
-          channel: 'SMS',
-          provider: smsResult.provider || 'SMS',
-          recipient: mobilePhone,
-          messageTemplate: 'Job Notification SMS',
-          providerMessageId: smsResult.providerMessageId,
-          status: smsResult.status,
-          errorCode: smsResult.errorCode,
-          errorMessage: smsResult.errorMessage,
-          payload: { smsMessage }
-        });
-
-        // Fallback to WhatsApp if SMS fails
-        if (!smsResult.success && fallbackEnabled && waEnabled && waNumber) {
-          fallbackUsed = true;
-          whatsappResult = await waProvider.sendWhatsApp(waNumber, payload);
-
-          this.logNotification({
-            jobId: requestId,
-            staffId,
-            channel: 'WhatsApp',
-            provider: waProvider.name,
-            recipient: waNumber,
-            messageTemplate: 'New Hotel Job Assignment (Fallback)',
-            providerMessageId: whatsappResult.providerMessageId,
-            status: whatsappResult.status,
-            errorCode: whatsappResult.errorCode,
-            errorMessage: whatsappResult.errorMessage,
-            fallbackUsed: 1,
-            payload
-          });
-        }
+      // 3. SMS Preferred (or default)
+      await dispatchSms();
+      if (!smsResult?.success && fallbackEnabled && isWaLive && waEnabled && waNumber) {
+        fallbackUsed = true;
+        await dispatchWhatsApp(true);
       }
     }
 
