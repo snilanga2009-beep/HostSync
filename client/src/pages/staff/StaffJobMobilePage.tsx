@@ -77,12 +77,14 @@ export const StaffJobMobilePage: React.FC = () => {
   const [isDrawing, setIsDrawing] = useState(false);
   const [hasSignature, setHasSignature] = useState(false);
 
+  const cleanToken = (token || '').trim().replace(/[.,;:/?#]+$/, '');
+
   const loadJob = async () => {
-    if (!token) return;
+    if (!cleanToken) return;
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`/api/jobs/${token}`);
+      const res = await fetch(`/api/jobs/${encodeURIComponent(cleanToken)}`);
       const data = await res.json();
       if (!res.ok) {
         setError(data.error || 'Unable to access job details.');
@@ -100,14 +102,14 @@ export const StaffJobMobilePage: React.FC = () => {
 
   useEffect(() => {
     loadJob();
-  }, [token]);
+  }, [cleanToken]);
 
   // Status transition handlers
   const handleAction = async (action: 'accept' | 'decline' | 'on-the-way' | 'arrived' | 'start') => {
-    if (!token) return;
+    if (!cleanToken) return;
     setActionLoading(true);
     try {
-      const res = await fetch(`/api/jobs/${token}/${action}`, {
+      const res = await fetch(`/api/jobs/${encodeURIComponent(cleanToken)}/${action}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({})
@@ -129,7 +131,7 @@ export const StaffJobMobilePage: React.FC = () => {
   // Complete job submission
   const handleCompleteJob = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!token) return;
+    if (!cleanToken) return;
     setActionLoading(true);
 
     try {
@@ -138,7 +140,7 @@ export const StaffJobMobilePage: React.FC = () => {
         signatureDataUrl = canvasRef.current.toDataURL('image/png');
       }
 
-      const res = await fetch(`/api/jobs/${token}/complete`, {
+      const res = await fetch(`/api/jobs/${encodeURIComponent(cleanToken)}/complete`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -170,10 +172,10 @@ export const StaffJobMobilePage: React.FC = () => {
 
   // Request new link if expired
   const handleRequestNewLink = async () => {
-    if (!token) return;
+    if (!cleanToken) return;
     setActionLoading(true);
     try {
-      const res = await fetch(`/api/jobs/${token}/request-link`, {
+      const res = await fetch(`/api/jobs/${encodeURIComponent(cleanToken)}/request-link`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' }
       });

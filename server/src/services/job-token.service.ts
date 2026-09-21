@@ -45,21 +45,29 @@ export class JobTokenService {
       // Use default
     }
 
-    // 24 random bytes -> 32 characters base64url string
-    const rawToken = crypto.randomBytes(24).toString('base64url');
+    // Self-healing signed token encoding: encodes requestId, staffId, hotelId, roomId, and expiration
+    const expTime = Date.now() + expiryHours * 60 * 60 * 1000;
+    const payloadObj = { r: requestId, s: staffId, h: hotelId, m: roomId, e: expTime };
+    const payloadB64 = Buffer.from(JSON.stringify(payloadObj)).toString('base64url');
+    const signature = crypto.createHmac('sha256', CONFIG.JWT_SECRET).update(payloadB64).digest('base64url').substring(0, 16);
+    const rawToken = `${payloadB64}.${signature}`;
     const id = `jtok-${uuidv4().substring(0, 8)}`;
 
-    const expiresAt = new Date(Date.now() + expiryHours * 60 * 60 * 1000)
+    const expiresAt = new Date(expTime)
       .toISOString()
       .replace('T', ' ')
       .substring(0, 19);
 
-    db.prepare(`
-      INSERT INTO job_tokens (
-        id, token, request_id, staff_id, hotel_id, room_id, expires_at,
-        is_revoked, access_count, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, datetime('now'))
-    `).run(id, rawToken, requestId, staffId, hotelId, roomId, expiresAt);
+    try {
+      db.prepare(`
+        INSERT INTO job_tokens (
+          id, token, request_id, staff_id, hotel_id, room_id, expires_at,
+          is_revoked, access_count, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, datetime('now'))
+      `).run(id, rawToken, requestId, staffId, hotelId, roomId, expiresAt);
+    } catch (err: any) {
+      console.warn('Could not insert job_token into DB:', err.message);
+    }
 
     // Resolve accessible base URL for mobile smartphones
     let baseWebUrl = CONFIG.BASE_URL;
@@ -111,6 +119,7 @@ export class JobTokenService {
 
   /**
    * Validates a job token, checking revocation, expiration, and job status.
+   * Features self-healing fallback to allow access even after server reboot or container redeployment.
    */
   static validateJobToken(token: string, clientIp?: string, userAgent?: string): {
     valid: boolean;
@@ -125,27 +134,87 @@ export class JobTokenService {
       return { valid: false, errorStatus: 400, errorCode: 'INVALID_TOKEN_FORMAT', errorMessage: 'Invalid job token format.' };
     }
 
-    const tokenRecord = db.prepare(`
+    const cleanToken = token.trim().replace(/[.,;:/?#]+$/, '');
+
+    let tokenRecord = db.prepare(`
       SELECT jt.*, datetime('now') as server_now
       FROM job_tokens jt
       WHERE jt.token = ?
-    `).get(token) as any;
+    `).get(cleanToken) as any;
+
+    // Self-healing fallback: If not found in SQLite (e.g. server container rebooted or disk reset), verify HMAC signature
+    if (!tokenRecord && cleanToken.includes('.')) {
+      const [payloadPart, sigPart] = cleanToken.split('.');
+      if (payloadPart && sigPart) {
+        const expectedSig = crypto.createHmac('sha256', CONFIG.JWT_SECRET).update(payloadPart).digest('base64url').substring(0, 16);
+        if (sigPart === expectedSig) {
+          try {
+            const decoded = JSON.parse(Buffer.from(payloadPart, 'base64url').toString('utf8'));
+            if (decoded.r && decoded.s) {
+              const expDate = new Date(decoded.e || (Date.now() + 48 * 3600 * 1000));
+              const expiresAt = expDate.toISOString().replace('T', ' ').substring(0, 19);
+              const autoId = `jtok-${uuidv4().substring(0, 8)}`;
+              try {
+                db.prepare(`
+                  INSERT OR IGNORE INTO job_tokens (
+                    id, token, request_id, staff_id, hotel_id, room_id, expires_at,
+                    is_revoked, access_count, created_at
+                  ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, datetime('now'))
+                `).run(autoId, cleanToken, decoded.r, decoded.s, decoded.h || 'hotel-ocean-pearl', decoded.m || '', expiresAt);
+              } catch (e) {}
+
+              tokenRecord = db.prepare(`SELECT jt.*, datetime('now') as server_now FROM job_tokens jt WHERE jt.token = ?`).get(cleanToken);
+            }
+          } catch (e) {}
+        }
+      }
+    }
+
+    // Fallback 2: Check if cleanToken matches request_id or recent token
+    if (!tokenRecord) {
+      const fallbackRecord = db.prepare(`
+        SELECT jt.*, datetime('now') as server_now
+        FROM job_tokens jt
+        WHERE jt.request_id = ? OR jt.token LIKE ?
+        ORDER BY jt.created_at DESC LIMIT 1
+      `).get(cleanToken, `%${cleanToken}%`) as any;
+      if (fallbackRecord) {
+        tokenRecord = fallbackRecord;
+      }
+    }
 
     if (!tokenRecord) {
-      return { valid: false, errorStatus: 404, errorCode: 'TOKEN_NOT_FOUND', errorMessage: 'Job link not found or invalid.' };
+      return { valid: false, errorStatus: 404, errorCode: 'TOKEN_NOT_FOUND', errorMessage: 'Job link not found or invalid. Please check your latest SMS link.' };
     }
 
+    // Revocation check: If marked revoked, verify whether the staff member is still assigned
     if (tokenRecord.is_revoked === 1) {
-      return {
-        valid: false,
-        errorStatus: 403,
-        errorCode: 'TOKEN_REVOKED',
-        errorMessage: tokenRecord.revoked_reason || 'This job link has been revoked or reassigned.'
-      };
+      const stillAssigned = db.prepare(`
+        SELECT id FROM staff_assignments
+        WHERE request_id = ? AND staff_id = ? AND status NOT IN ('Cancelled', 'Declined')
+        LIMIT 1
+      `).get(tokenRecord.request_id, tokenRecord.staff_id) as any;
+
+      const gsrStillAssigned = db.prepare(`
+        SELECT id FROM guest_service_requests
+        WHERE id = ? AND status NOT IN ('Cancelled', 'Declined')
+        LIMIT 1
+      `).get(tokenRecord.request_id) as any;
+
+      if (!stillAssigned && !gsrStillAssigned) {
+        return {
+          valid: false,
+          errorStatus: 403,
+          errorCode: 'TOKEN_REVOKED',
+          errorMessage: tokenRecord.revoked_reason || 'This job link has been reassigned to another technician.'
+        };
+      }
+      // If still assigned to technician, allow seamless access
     }
 
-    // Expiration check
-    if (new Date(tokenRecord.expires_at).getTime() < Date.now()) {
+    // Expiration check (UTC safe comparison)
+    const expTime = new Date((tokenRecord.expires_at || '').replace(' ', 'T') + 'Z').getTime();
+    if (!isNaN(expTime) && expTime < Date.now()) {
       return {
         valid: false,
         errorStatus: 410,
@@ -154,8 +223,8 @@ export class JobTokenService {
       };
     }
 
-    // Load maintenance request & assigned staff details
-    const job = db.prepare(`
+    // Load maintenance request details
+    let job = db.prepare(`
       SELECT mr.*,
              r.room_number, r.name as room_name,
              b.name as building_name, f.name as floor_name,
@@ -169,12 +238,40 @@ export class JobTokenService {
       JOIN hotels h ON mr.hotel_id = h.id
       LEFT JOIN buildings b ON r.building_id = b.id
       LEFT JOIN floors f ON r.floor_id = f.id
-      LEFT JOIN staff_assignments sa ON sa.request_id = mr.id AND sa.staff_id = ? AND sa.status != 'Reassigned'
+      LEFT JOIN staff_assignments sa ON sa.request_id = mr.id AND sa.staff_id = ?
       WHERE mr.id = ?
     `).get(tokenRecord.staff_id, tokenRecord.request_id) as any;
 
+    // Load guest service request details if not maintenance
     if (!job) {
-      return { valid: false, errorStatus: 404, errorCode: 'JOB_NOT_FOUND', errorMessage: 'Associated job request was not found.' };
+      const gsr = db.prepare(`
+        SELECT gsr.*,
+               gsr.service_type as priority,
+               gsr.service_type as job_type,
+               gsr.special_instructions as description,
+               r.room_number, r.name as room_name,
+               b.name as building_name, f.name as floor_name,
+               h.name as hotel_name, h.logo_url as hotel_logo, h.phone as hotel_phone,
+               sa.id as assignment_id, sa.status as assignment_status, sa.assigned_at,
+               (SELECT u.full_name FROM users u WHERE u.id = sa.assigned_by_user_id) as assigned_by_name,
+               (SELECT GROUP_CONCAT(gsri.item_name, ', ')
+                FROM guest_service_request_items gsri WHERE gsri.request_id = gsr.id) as items_summary
+        FROM guest_service_requests gsr
+        JOIN rooms r ON gsr.room_id = r.id
+        JOIN hotels h ON gsr.hotel_id = h.id
+        LEFT JOIN buildings b ON r.building_id = b.id
+        LEFT JOIN floors f ON r.floor_id = f.id
+        LEFT JOIN staff_assignments sa ON sa.request_id = gsr.id AND sa.staff_id = ?
+        WHERE gsr.id = ?
+      `).get(tokenRecord.staff_id, tokenRecord.request_id) as any;
+
+      if (gsr) {
+        job = gsr;
+      }
+    }
+
+    if (!job) {
+      return { valid: false, errorStatus: 404, errorCode: 'JOB_NOT_FOUND', errorMessage: 'Associated job request was not found or was deleted.' };
     }
 
     const staff = db.prepare(`
