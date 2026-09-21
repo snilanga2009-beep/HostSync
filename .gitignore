@@ -33,3 +33,4 @@ data/*.db-wal
 # Uploaded images during testing
 uploads/*
 !uploads/.gitkeep
+.vercel
